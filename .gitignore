@@ -1,0 +1,32 @@
+# Binary
+pulumi-backend
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Reference upstream source
+reference/
+
+# Test artifacts
+*.test
+pulumi-spec.json
+
+# Debug logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
