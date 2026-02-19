@@ -51,6 +51,7 @@ go test ./internal/...                                    # unit tests
 go test -timeout 120s ./tests/ -skip '^TestCLI'           # API + auth tests (no pulumi needed)
 go test -v -timeout 120s ./tests/ -run TestCLI            # CLI integration (needs pulumi in PATH)
 go test -v -run TestAPISpecSchemaCompliance ./tests/       # spec compliance
+go test -bench . -benchmem ./internal/engine              # run engine benchmarks (not in CI)
 go test -timeout 600s ./tests/ -count=1                   # full suite
 golangci-lint run ./...                                   # lint
 ```

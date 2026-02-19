@@ -150,6 +150,7 @@ go test ./internal/...                                   # unit tests
 go test ./tests/ -skip '^TestCLI'                        # HTTP API + auth integration tests (no pulumi needed)
 go test ./tests/ -run TestCLI                             # CLI integration tests (requires pulumi in PATH)
 go test -v ./tests/ -run TestAPISpecSchemaCompliance      # OpenAPI spec compliance
+go test -bench . -benchmem ./internal/engine              # run engine benchmarks (not in CI)
 go test -timeout 600s ./tests/ -count=1                   # full suite
 ```
 
