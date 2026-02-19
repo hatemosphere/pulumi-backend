@@ -59,14 +59,14 @@ type StackConfig struct {
 
 // UpdateOptions describes options for an update request.
 type UpdateOptions struct {
-	AutoApprove         bool   `json:"autoApprove,omitempty"`
-	Color               string `json:"color,omitempty"`
-	DryRun              bool   `json:"dryRun,omitempty"`
-	Parallel            int    `json:"parallel,omitempty"`
-	ShowConfig          bool   `json:"showConfig,omitempty"`
-	ShowReplacementSteps bool  `json:"showReplacementSteps,omitempty"`
-	ShowSames           bool   `json:"showSames,omitempty"`
-	ShowReads           bool   `json:"showReads,omitempty"`
+	AutoApprove          bool   `json:"autoApprove,omitempty"`
+	Color                string `json:"color,omitempty"`
+	DryRun               bool   `json:"dryRun,omitempty"`
+	Parallel             int    `json:"parallel,omitempty"`
+	ShowConfig           bool   `json:"showConfig,omitempty"`
+	ShowReplacementSteps bool   `json:"showReplacementSteps,omitempty"`
+	ShowSames            bool   `json:"showSames,omitempty"`
+	ShowReads            bool   `json:"showReads,omitempty"`
 }
 
 // UntypedDeployment represents an untyped deployment object.
@@ -103,15 +103,15 @@ type StackSummary struct {
 
 // UpdateInfo describes metadata about an update in history responses.
 type UpdateInfo struct {
-	Kind            string          `json:"kind"`
-	Result          string          `json:"result"`
-	Message         string          `json:"message"`
-	Version         int             `json:"version"`
-	StartTime       int64           `json:"startTime"`
-	EndTime         *int64          `json:"endTime,omitempty"`
-	ResourceChanges json.RawMessage `json:"resourceChanges,omitempty"`
+	Kind            string            `json:"kind"`
+	Result          string            `json:"result"`
+	Message         string            `json:"message"`
+	Version         int               `json:"version"`
+	StartTime       int64             `json:"startTime"`
+	EndTime         *int64            `json:"endTime,omitempty"`
+	ResourceChanges json.RawMessage   `json:"resourceChanges,omitempty"`
 	Environment     map[string]string `json:"environment,omitempty"`
-	Config          map[string]any  `json:"config,omitempty"`
+	Config          map[string]any    `json:"config,omitempty"`
 }
 
 // RequestedBy identifies who initiated an update.
@@ -211,10 +211,10 @@ type CreateStackInput struct {
 	OrgName     string `path:"orgName" doc:"Organization name"`
 	ProjectName string `path:"projectName" doc:"Project name"`
 	Body        struct {
-		StackName string            `json:"stackName"`
-		Tags      map[string]string `json:"tags,omitempty"`
-		Teams     []string          `json:"teams,omitempty"`
-		Config    *StackConfig      `json:"config,omitempty"`
+		StackName string             `json:"stackName"`
+		Tags      map[string]string  `json:"tags,omitempty"`
+		Teams     []string           `json:"teams,omitempty"`
+		Config    *StackConfig       `json:"config,omitempty"`
 		State     *UntypedDeployment `json:"state,omitempty"`
 	}
 }
@@ -229,9 +229,9 @@ type GetStackInput struct {
 
 type GetStackOutput struct {
 	Body struct {
-		OrgName       string            `json:"orgName"`
-		ProjectName   string            `json:"projectName"`
-		StackName     string            `json:"stackName"`
+		OrgName      string            `json:"orgName"`
+		ProjectName  string            `json:"projectName"`
+		StackName    string            `json:"stackName"`
 		Tags         map[string]string `json:"tags"`
 		Version      int               `json:"version"`
 		ActiveUpdate *string           `json:"activeUpdate,omitempty"`

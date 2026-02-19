@@ -61,8 +61,8 @@ func startBackend(t *testing.T) *testBackend {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 
-	httpServer := &http.Server{Handler: router}
-	go httpServer.Serve(listener)
+	httpServer := &http.Server{Handler: router, ReadHeaderTimeout: 10 * time.Second} //nolint:gosec // test server
+	go func() { _ = httpServer.Serve(listener) }()
 
 	tb := &testBackend{
 		URL:     fmt.Sprintf("http://127.0.0.1:%d", port),
@@ -72,7 +72,7 @@ func startBackend(t *testing.T) *testBackend {
 	}
 
 	t.Cleanup(func() {
-		httpServer.Shutdown(context.Background())
+		_ = httpServer.Shutdown(context.Background())
 		store.Close()
 	})
 

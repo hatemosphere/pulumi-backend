@@ -1,0 +1,75 @@
+version: "2"
+linters:
+  enable:
+    - copyloopvar
+    - durationcheck
+    - exhaustive
+    - goprintffuncname
+    - gosec
+    - misspell
+    - nakedret
+    - nolintlint
+    - perfsprint
+    - prealloc
+    - revive
+    - unconvert
+    - usetesting
+    - wastedassign
+    - whitespace
+  settings:
+    govet:
+      enable:
+        - nilness
+        - reflectvaluecompare
+        - sortslice
+        - unusedwrite
+    nakedret:
+      max-func-lines: 60
+    nolintlint:
+      allow-unused: true
+    revive:
+      rules:
+        - name: use-any
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - revive
+        text: 'unused-parameter: parameter \S+ seems to be unused, consider removing or renaming it as _'
+      - linters:
+          - revive
+        text: 'empty-block: this block is empty, you can remove it'
+      - linters:
+          - staticcheck
+        text: 'error strings should not end with punctuation or newlines'
+      - linters:
+          - staticcheck
+        text: 'error strings should not be capitalized'
+      - linters:
+          - gosec
+        text: 'G704: SSRF'
+        path: _test\.go$
+      - linters:
+          - gosec
+        text: 'G306: Expect WriteFile permissions'
+        path: _test\.go$
+    paths:
+      - testdata$
+      - third_party$
+      - vendor$
+      - reference$
+formatters:
+  enable:
+    - gofumpt
+  exclusions:
+    generated: lax
+    paths:
+      - testdata$
+      - third_party$
+      - vendor$
+      - reference$

@@ -131,7 +131,7 @@ func TestCapabilitiesResponse(t *testing.T) {
 			var config struct {
 				CutoffSize int `json:"checkpointCutoffSizeBytes"`
 			}
-			json.Unmarshal(cap.Configuration, &config)
+			_ = json.Unmarshal(cap.Configuration, &config)
 			if config.CutoffSize == 0 {
 				t.Fatal("expected non-zero checkpointCutoffSizeBytes")
 			}
@@ -684,7 +684,9 @@ func TestDuplicateUpdateLockingHTTP(t *testing.T) {
 	// Create and start an update.
 	resp = tb.httpDo(t, "POST", "/api/stacks/organization/test-project/dev/update",
 		map[string]any{"config": map[string]any{}, "metadata": map[string]any{}})
-	var createResp struct{ UpdateID string `json:"updateID"` }
+	var createResp struct {
+		UpdateID string `json:"updateID"`
+	}
 	httpJSON(t, resp, &createResp)
 
 	resp = tb.httpDo(t, "POST", "/api/stacks/organization/test-project/dev/update/"+createResp.UpdateID,
@@ -955,7 +957,9 @@ func TestCheckpointVerbatimHTTP(t *testing.T) {
 
 	resp = tb.httpDo(t, "POST", "/api/stacks/organization/test-project/dev/update",
 		map[string]any{"config": map[string]any{}, "metadata": map[string]any{}})
-	var createResp struct{ UpdateID string `json:"updateID"` }
+	var createResp struct {
+		UpdateID string `json:"updateID"`
+	}
 	httpJSON(t, resp, &createResp)
 
 	resp = tb.httpDo(t, "POST", "/api/stacks/organization/test-project/dev/update/"+createResp.UpdateID,

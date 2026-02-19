@@ -92,7 +92,7 @@ func TestAPISpecCoverage(t *testing.T) {
 		count     int
 		endpoints []string
 	}
-	var sorted []catEntry
+	sorted := make([]catEntry, 0, len(groups))
 	for cat, eps := range groups {
 		sorted = append(sorted, catEntry{cat, len(eps), eps})
 	}
@@ -224,7 +224,7 @@ func TestAPISpecSchemaCompliance(t *testing.T) {
 			matchedPaths++
 			endpoint := strings.ToUpper(method) + " " + path
 
-			var diffs []string
+			var diffs []string //nolint:prealloc // accumulated from multiple sources
 
 			// Compare parameters.
 			diffs = append(diffs, compareParameters(upstreamOp, ourOp)...)
@@ -442,7 +442,7 @@ func compareRequestBody(upstream, ours *openapi3.Operation) []string {
 
 // compareResponses compares the success response schemas between upstream and ours.
 func compareResponses(upstream, ours *openapi3.Operation) []string {
-	var diffs []string
+	var diffs []string //nolint:prealloc // accumulated conditionally
 
 	// Compare success status codes.
 	upResp := getSuccessResponse(upstream.Responses)

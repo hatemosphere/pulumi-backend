@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
-	"encoding/json"
 	"github.com/klauspost/compress/gzip"
 
 	_ "modernc.org/sqlite"
@@ -76,7 +77,7 @@ func (s *SQLiteStore) migrate() error {
 	for _, m := range []string{
 		`ALTER TABLE stacks ADD COLUMN resource_count INTEGER NOT NULL DEFAULT 0`,
 	} {
-		s.db.Exec(m) // Ignore "duplicate column" errors.
+		_, _ = s.db.Exec(m) // Ignore "duplicate column" errors.
 	}
 	return nil
 }
@@ -198,7 +199,7 @@ func (s *SQLiteStore) CreateStack(ctx context.Context, st *Stack) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
 	// Ensure org exists.
 	_, err = tx.ExecContext(ctx,
@@ -246,7 +247,9 @@ func (s *SQLiteStore) GetStack(ctx context.Context, org, project, stack string) 
 	}
 	st.CreatedAt = time.Unix(createdAt, 0)
 	st.UpdatedAt = time.Unix(updatedAt, 0)
-	json.Unmarshal([]byte(tagsJSON), &st.Tags)
+	if err := json.Unmarshal([]byte(tagsJSON), &st.Tags); err != nil {
+		slog.Warn("failed to unmarshal stack tags", "org", st.OrgName, "project", st.ProjectName, "stack", st.StackName, "error", err)
+	}
 	if st.Tags == nil {
 		st.Tags = map[string]string{}
 	}
@@ -258,7 +261,7 @@ func (s *SQLiteStore) DeleteStack(ctx context.Context, org, project, stack strin
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
 	// Delete in dependency order.
 	for _, table := range []string{"journal_entries", "engine_events"} {
@@ -304,7 +307,8 @@ func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, conti
 			args = append(args, "", "", "")
 		}
 	}
-	query += fmt.Sprintf(` ORDER BY org_name, project_name, name LIMIT %d`, s.stackListPageSize)
+	query += ` ORDER BY org_name, project_name, name LIMIT ?`
+	args = append(args, s.stackListPageSize)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -322,7 +326,9 @@ func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, conti
 		}
 		st.CreatedAt = time.Unix(createdAt, 0)
 		st.UpdatedAt = time.Unix(updatedAt, 0)
-		json.Unmarshal([]byte(tagsJSON), &st.Tags)
+		if err := json.Unmarshal([]byte(tagsJSON), &st.Tags); err != nil {
+			slog.Warn("failed to unmarshal stack tags", "org", st.OrgName, "project", st.ProjectName, "stack", st.StackName, "error", err)
+		}
 		if st.Tags == nil {
 			st.Tags = map[string]string{}
 		}
@@ -378,7 +384,7 @@ func (s *SQLiteStore) RenameStack(ctx context.Context, org, oldProject, oldName,
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
 	// Update stack name and project.
 	_, err = tx.ExecContext(ctx,
@@ -515,7 +521,7 @@ func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
 	// Check if already compressed (magic bytes: 0x1f 0x8b).
 	var compressedDeployment []byte
@@ -679,7 +685,7 @@ func (s *SQLiteStore) SaveJournalEntries(ctx context.Context, entries []JournalE
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT OR REPLACE INTO journal_entries (update_id, sequence_id, entry) VALUES (?, ?, ?)`)
@@ -726,7 +732,7 @@ func (s *SQLiteStore) SaveEngineEvents(ctx context.Context, events []EngineEvent
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
 	stmt, err := tx.PrepareContext(ctx,
 		`INSERT OR REPLACE INTO engine_events (update_id, sequence, event) VALUES (?, ?, ?)`)

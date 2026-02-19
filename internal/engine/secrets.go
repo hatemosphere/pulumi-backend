@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -84,7 +85,7 @@ func (s *SecretsEngine) Decrypt(stackKey, ciphertext []byte) ([]byte, error) {
 	}
 	nonceSize := gcm.NonceSize()
 	if len(decoded) < nonceSize {
-		return nil, fmt.Errorf("ciphertext too short")
+		return nil, errors.New("ciphertext too short")
 	}
 	nonce, ct := decoded[:nonceSize], decoded[nonceSize:]
 	return gcm.Open(nil, nonce, ct, nil)
@@ -117,7 +118,7 @@ func (s *SecretsEngine) decryptWithMaster(ciphertext []byte) ([]byte, error) {
 	}
 	nonceSize := gcm.NonceSize()
 	if len(ciphertext) < nonceSize {
-		return nil, fmt.Errorf("ciphertext too short")
+		return nil, errors.New("ciphertext too short")
 	}
 	nonce, ct := ciphertext[:nonceSize], ciphertext[nonceSize:]
 	return gcm.Open(nil, nonce, ct, nil)

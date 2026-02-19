@@ -2,18 +2,18 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"encoding/json"
 )
 
 func (s *Server) registerUpdates(api huma.API) {
 	// --- Create update (4 kinds) ---
 	for _, kind := range []string{"preview", "update", "refresh", "destroy"} {
-		kind := kind // capture loop variable
 		huma.Register(api, huma.Operation{
 			OperationID: "create" + ucfirst(kind),
 			Method:      http.MethodPost,
@@ -26,7 +26,9 @@ func (s *Server) registerUpdates(api huma.API) {
 				Config   json.RawMessage `json:"config"`
 				Metadata json.RawMessage `json:"metadata"`
 			}
-			json.Unmarshal(input.RawBody, &raw)
+			if err := json.Unmarshal(input.RawBody, &raw); err != nil {
+				slog.Warn("failed to extract config/metadata from request body", "error", err)
+			}
 			result, err := s.engine.CreateUpdate(ctx, input.OrgName, input.ProjectName, input.StackName, kind, raw.Config, raw.Metadata)
 			if err != nil {
 				return nil, huma.NewError(http.StatusConflict, err.Error())

@@ -294,7 +294,7 @@ outputs:
 
 	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/before-rename")
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "rename-test-v2"
@@ -303,7 +303,9 @@ outputs:
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization/test-project/before-rename/updates", nil)
 	var histBefore struct {
-		Updates []struct{ Version int `json:"version"` } `json:"updates"`
+		Updates []struct {
+			Version int `json:"version"`
+		} `json:"updates"`
 	}
 	httpJSON(t, resp, &histBefore)
 	beforeCount := len(histBefore.Updates)
@@ -319,7 +321,9 @@ outputs:
 
 	resp = tb.httpDo(t, "GET", "/api/stacks/organization/test-project/after-rename/updates", nil)
 	var histAfter struct {
-		Updates []struct{ Version int `json:"version"` } `json:"updates"`
+		Updates []struct {
+			Version int `json:"version"`
+		} `json:"updates"`
 	}
 	httpJSON(t, resp, &histAfter)
 
@@ -479,7 +483,7 @@ outputs:
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   version: "v2"
@@ -494,7 +498,7 @@ outputs:
 		t.Fatalf("expected '1 unchanged' in second update, got: %s", out)
 	}
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   version: "v3"
@@ -538,7 +542,7 @@ outputs:
 	}
 	firstVersion := stackResp.Version
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "v2"
@@ -687,7 +691,7 @@ outputs:
 
 	out = tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
 	var export map[string]any
-	json.Unmarshal([]byte(out), &export)
+	_ = json.Unmarshal([]byte(out), &export)
 	deployment := export["deployment"].(map[string]any)
 	resources := deployment["resources"]
 	if resources != nil {
@@ -715,7 +719,7 @@ outputs:
 	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
 	tb.pulumiEnv(t, dir, journalEnv, "destroy", "--yes", "--stack", "organization/test-project/dev")
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "phase-2"
@@ -776,7 +780,7 @@ outputs:
 
 	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "v2"
@@ -857,7 +861,7 @@ outputs:
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
 
 	exportFile := filepath.Join(dir, "state.json")
-	os.WriteFile(exportFile, []byte(exported), 0o644)
+	_ = os.WriteFile(exportFile, []byte(exported), 0o644)
 
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/staging")
 	tb.pulumi(t, dir, "stack", "import", "--file", exportFile, "--stack", "organization/test-project/staging", "--force")
@@ -865,8 +869,12 @@ outputs:
 	reExported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/staging")
 
 	var orig, reimp map[string]any
-	json.Unmarshal([]byte(exported), &orig)
-	json.Unmarshal([]byte(reExported), &reimp)
+	if err := json.Unmarshal([]byte(exported), &orig); err != nil {
+		t.Fatalf("unmarshal exported: %v", err)
+	}
+	if err := json.Unmarshal([]byte(reExported), &reimp); err != nil {
+		t.Fatalf("unmarshal re-exported: %v", err)
+	}
 
 	origRes := orig["deployment"].(map[string]any)["resources"]
 	reimpRes := reimp["deployment"].(map[string]any)["resources"]
@@ -896,7 +904,7 @@ outputs:
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   version: "v2"
@@ -915,8 +923,13 @@ outputs:
 	}
 
 	var export map[string]any
-	b, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(b, &export)
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	if err := json.Unmarshal(b, &export); err != nil {
+		t.Fatalf("unmarshal export: %v", err)
+	}
 
 	if export["deployment"] == nil {
 		t.Fatal("expected deployment in versioned export")
@@ -963,7 +976,7 @@ outputs:
 	tb.pulumi(t, dir2, "stack", "init", "organization/project-target/dev")
 
 	exportFile := filepath.Join(dir2, "state.json")
-	os.WriteFile(exportFile, []byte(exported), 0o644)
+	_ = os.WriteFile(exportFile, []byte(exported), 0o644)
 	tb.pulumi(t, dir2, "stack", "import", "--file", exportFile, "--stack", "organization/project-target/dev", "--force")
 
 	reimported := tb.pulumi(t, dir2, "stack", "export", "--stack", "organization/project-target/dev")
@@ -983,7 +996,7 @@ runtime: yaml
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	stateFile := filepath.Join(dir, "state.json")
-	os.WriteFile(stateFile, []byte(`{
+	_ = os.WriteFile(stateFile, []byte(`{
 		"version": 3,
 		"deployment": {
 			"manifest": {"time": "2024-01-01T00:00:00Z", "magic": "test", "version": "v3.0.0"},
@@ -1022,7 +1035,7 @@ outputs:
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
 
 	stateFile := filepath.Join(dir, "state.json")
-	os.WriteFile(stateFile, []byte(exported), 0o644)
+	_ = os.WriteFile(stateFile, []byte(exported), 0o644)
 	tb.pulumi(t, dir, "stack", "import", "--file", stateFile, "--stack", "organization/test-project/dev")
 
 	out := tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
@@ -1055,7 +1068,7 @@ outputs:
 		t.Fatalf("expected Stack resource in export, got: %s", out)
 	}
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "delta-test-v2"
@@ -1071,7 +1084,7 @@ outputs:
 		t.Fatalf("expected 'delta-test-v2' in export after delta update, got: %s", out)
 	}
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "delta-test-v3"
@@ -1106,7 +1119,7 @@ outputs:
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "v2"
@@ -1116,7 +1129,7 @@ outputs:
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "v3"
@@ -1154,7 +1167,7 @@ outputs:
 		t.Fatal("expected stack resource after checkpoint update")
 	}
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "v2"
@@ -1164,7 +1177,7 @@ outputs:
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "v3"
@@ -1294,7 +1307,7 @@ outputs:
 	var createResp struct {
 		UpdateID string `json:"updateID"`
 	}
-	json.NewDecoder(resp.Body).Decode(&createResp)
+	_ = json.NewDecoder(resp.Body).Decode(&createResp)
 	resp.Body.Close()
 
 	startReq, _ := http.NewRequest("POST",
@@ -1367,7 +1380,7 @@ outputs:
 	var createResp struct {
 		UpdateID string `json:"updateID"`
 	}
-	json.NewDecoder(resp.Body).Decode(&createResp)
+	_ = json.NewDecoder(resp.Body).Decode(&createResp)
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -1424,7 +1437,7 @@ outputs:
 
 	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "v2"
@@ -1502,7 +1515,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	for i := 1; i <= 5; i++ {
-		os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(fmt.Sprintf(`name: test-project
+		_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(fmt.Sprintf(`name: test-project
 runtime: yaml
 outputs:
   value: "v%d"
@@ -1558,7 +1571,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	for i := 1; i <= 12; i++ {
-		os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(fmt.Sprintf(`name: test-project
+		_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(fmt.Sprintf(`name: test-project
 runtime: yaml
 outputs:
   value: "v%d"
@@ -1605,7 +1618,7 @@ func TestLargeState(t *testing.T) {
 	var outputs strings.Builder
 	outputs.WriteString("name: large-project\nruntime: yaml\noutputs:\n")
 	for i := 0; i < 50; i++ {
-		outputs.WriteString(fmt.Sprintf("  key%03d: \"%s\"\n", i, strings.Repeat("x", 200)))
+		fmt.Fprintf(&outputs, "  key%03d: \"%s\"\n", i, strings.Repeat("x", 200))
 	}
 
 	dir := makeYAMLProject(t, outputs.String())
@@ -1632,7 +1645,7 @@ func TestLargeState(t *testing.T) {
 	}
 
 	exportFile := filepath.Join(dir, "state.json")
-	os.WriteFile(exportFile, []byte(exported), 0o644)
+	_ = os.WriteFile(exportFile, []byte(exported), 0o644)
 	tb.pulumi(t, dir, "stack", "import", "--file", exportFile, "--stack", "organization/large-project/dev")
 
 	reExported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/large-project/dev")
@@ -1662,7 +1675,7 @@ outputs:
 
 	goodState := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 resources:
   bucket:
@@ -1678,8 +1691,12 @@ resources:
 	afterState := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
 
 	var good, after map[string]any
-	json.Unmarshal([]byte(goodState), &good)
-	json.Unmarshal([]byte(afterState), &after)
+	if err := json.Unmarshal([]byte(goodState), &good); err != nil {
+		t.Fatalf("failed to unmarshal goodState: %v", err)
+	}
+	if err := json.Unmarshal([]byte(afterState), &after); err != nil {
+		t.Fatalf("failed to unmarshal afterState: %v", err)
+	}
 
 	goodRes, _ := json.Marshal(good["deployment"].(map[string]any)["resources"])
 	afterRes, _ := json.Marshal(after["deployment"].(map[string]any)["resources"])
@@ -1722,7 +1739,7 @@ outputs:
 		t.Fatalf("no-op up should show 1 unchanged, got: %s", out)
 	}
 
-	os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: lifecycle-test
+	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: lifecycle-test
 runtime: yaml
 outputs:
   phase: "update"
@@ -1741,7 +1758,7 @@ outputs:
 
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/lifecycle-test/dev")
 	exportFile := filepath.Join(dir, "state.json")
-	os.WriteFile(exportFile, []byte(exported), 0o644)
+	_ = os.WriteFile(exportFile, []byte(exported), 0o644)
 	tb.pulumi(t, dir, "stack", "import", "--file", exportFile, "--stack", "organization/lifecycle-test/dev")
 
 	out = tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/lifecycle-test/dev")
@@ -1756,7 +1773,9 @@ outputs:
 
 	exported = tb.pulumi(t, dir, "stack", "export", "--stack", "organization/lifecycle-test/dev")
 	var state map[string]any
-	json.Unmarshal([]byte(exported), &state)
+	if err := json.Unmarshal([]byte(exported), &state); err != nil {
+		t.Fatalf("failed to unmarshal exported state: %v", err)
+	}
 	dep := state["deployment"].(map[string]any)
 	if res, ok := dep["resources"]; ok && res != nil {
 		resSlice, ok := res.([]any)

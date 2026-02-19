@@ -2,11 +2,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
-	"encoding/json"
 )
 
 // exportStack handles both versioned and unversioned stack export with gzip negotiation.
@@ -23,7 +23,7 @@ func (s *Server) exportStack(ctx context.Context, org, project, stack string, ve
 		return &huma.StreamResponse{
 			Body: func(ctx huma.Context) {
 				ctx.SetHeader("Content-Type", "application/json")
-				ctx.BodyWriter().Write(deployment)
+				_, _ = ctx.BodyWriter().Write(deployment)
 			},
 		}, nil
 	}
@@ -33,7 +33,7 @@ func (s *Server) exportStack(ctx context.Context, org, project, stack string, ve
 			ctx.SetHeader("Content-Type", "application/json")
 			if isGzip && strings.Contains(ctx.Header("Accept-Encoding"), "gzip") {
 				ctx.SetHeader("Content-Encoding", "gzip")
-				ctx.BodyWriter().Write(data)
+				_, _ = ctx.BodyWriter().Write(data)
 			} else if isGzip {
 				// Client doesn't accept gzip; decompress before sending.
 				deployment, err := s.engine.ExportState(ctx.Context(), org, project, stack, version)
@@ -41,9 +41,9 @@ func (s *Server) exportStack(ctx context.Context, org, project, stack string, ve
 					ctx.SetStatus(http.StatusInternalServerError)
 					return
 				}
-				ctx.BodyWriter().Write(deployment)
+				_, _ = ctx.BodyWriter().Write(deployment)
 			} else {
-				ctx.BodyWriter().Write(data)
+				_, _ = ctx.BodyWriter().Write(data)
 			}
 		},
 	}, nil

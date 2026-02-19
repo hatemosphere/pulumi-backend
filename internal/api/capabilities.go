@@ -2,10 +2,10 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
-	"encoding/json"
 )
 
 func (s *Server) registerCapabilities(api huma.API) {

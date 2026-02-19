@@ -23,12 +23,12 @@ type Config struct {
 	DefaultUser string
 
 	// Tuning.
-	LeaseDuration    time.Duration // update lease TTL
-	CacheSize        int           // LRU cache entries for deployment snapshots
-	DeltaCutoffBytes int           // checkpoint size threshold for delta mode
-	HistoryPageSize  int           // default page size for update history
-	MaxStateVersions int           // max state versions kept per stack (0 = unlimited)
-	StackListPageSize int          // page size for stack listings
+	LeaseDuration     time.Duration // update lease TTL
+	CacheSize         int           // LRU cache entries for deployment snapshots
+	DeltaCutoffBytes  int           // checkpoint size threshold for delta mode
+	HistoryPageSize   int           // default page size for update history
+	MaxStateVersions  int           // max state versions kept per stack (0 = unlimited)
+	StackListPageSize int           // page size for stack listings
 
 	// Async event buffering.
 	EventBufferSize    int           // max buffered events before forced flush

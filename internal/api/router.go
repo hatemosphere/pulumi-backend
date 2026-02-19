@@ -2,8 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	stdjson "encoding/json"
 	"io"
 	"log/slog"
@@ -171,7 +169,7 @@ func (s *Server) registerPublicRoutes(api huma.API) {
 						ctx.SetHeader(k, v)
 					}
 				}
-				ctx.BodyWriter().Write(rec.Body.Bytes())
+				_, _ = ctx.BodyWriter().Write(rec.Body.Bytes())
 			},
 		}, nil
 	})
@@ -188,9 +186,9 @@ func (s *Server) registerPublicRoutes(api huma.API) {
 				ctx.SetHeader("Content-Type", "application/json")
 				if s.humaAPI != nil {
 					data, _ := stdjson.Marshal(s.humaAPI.OpenAPI())
-					ctx.BodyWriter().Write(data)
+					_, _ = ctx.BodyWriter().Write(data)
 				} else {
-					ctx.BodyWriter().Write([]byte(`{}`))
+					_, _ = ctx.BodyWriter().Write([]byte(`{}`))
 				}
 			},
 		}, nil
@@ -204,7 +202,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		if auth == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			stdjson.NewEncoder(w).Encode(map[string]any{
+			_ = stdjson.NewEncoder(w).Encode(map[string]any{
 				"code":    http.StatusUnauthorized,
 				"message": "missing Authorization header",
 			})
@@ -219,28 +217,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		stdjson.NewEncoder(w).Encode(map[string]any{
+		_ = stdjson.NewEncoder(w).Encode(map[string]any{
 			"code":    http.StatusUnauthorized,
 			"message": "invalid Authorization header format",
 		})
 	})
-}
-
-// tokenFromAuth extracts the token value from an Authorization header.
-func tokenFromAuth(auth string) string {
-	if strings.HasPrefix(auth, "token ") {
-		return strings.TrimPrefix(auth, "token ")
-	}
-	if strings.HasPrefix(auth, "update-token ") {
-		return strings.TrimPrefix(auth, "update-token ")
-	}
-	return ""
-}
-
-// tokenHash returns SHA-256 hash of a token for storage lookup.
-func tokenHash(token string) string {
-	h := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(h[:])
 }
 
 // slogRequestLogger logs each HTTP request with method, path, status code, and latency.
@@ -249,7 +230,7 @@ func slogRequestLogger(next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
-		slog.Info("request",
+		slog.Info("request", //nolint:gosec // structured logger, not format string
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", sw.status,
@@ -266,7 +247,7 @@ func gzipDecompressor(next http.Handler) http.Handler {
 			if err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
-				stdjson.NewEncoder(w).Encode(map[string]any{
+				_ = stdjson.NewEncoder(w).Encode(map[string]any{
 					"code":    http.StatusBadRequest,
 					"message": "invalid gzip body",
 				})

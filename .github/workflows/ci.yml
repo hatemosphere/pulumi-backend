@@ -21,6 +21,17 @@ jobs:
 
       - run: go build ./...
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: go.mod
+
+      - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+
   test-unit:
     runs-on: ubuntu-latest
     steps:
@@ -69,7 +80,7 @@ jobs:
         run: curl -sfo pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json
 
       - name: HTTP API and spec compliance tests
-        run: gotestsum --junitfile api-results.xml -- -timeout 120s ./tests/ -run 'Test[^C][^L][^I]' -count=1
+        run: gotestsum --junitfile api-results.xml -- -timeout 120s ./tests/ -skip '^TestCLI' -count=1
 
       - name: Test report
         uses: mikepenz/action-junit-report@74626db7353a25a20a72816467ebf035f674c5f8 # v6.2.0
@@ -90,6 +101,8 @@ jobs:
 
   test-cli:
     runs-on: ubuntu-latest
+    env:
+      PULUMI_ENABLE_JOURNALING: "true"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 

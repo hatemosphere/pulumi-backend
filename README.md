@@ -79,7 +79,7 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 
 ```bash
 go test ./...                                             # full suite (CLI tests need pulumi in PATH)
-go test ./tests/ -run 'Test[^C][^L][^I]'                  # HTTP API tests only (no pulumi needed)
+go test ./tests/ -skip '^TestCLI'                         # HTTP API tests only (no pulumi needed)
 go test ./tests/ -run TestCLI                              # CLI integration tests
 go test -v ./tests/ -run TestAPISpecSchemaCompliance       # OpenAPI spec compliance
 ```

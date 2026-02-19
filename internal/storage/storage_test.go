@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,12 +11,7 @@ import (
 
 func TestCompression(t *testing.T) {
 	// Setup temporary DB.
-	tmpDir, err := os.MkdirTemp("", "pulumi-backend-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
-
+	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	store, err := NewSQLiteStore(dbPath, SQLiteStoreConfig{})
 	if err != nil {

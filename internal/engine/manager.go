@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,8 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"encoding/json"
 
 	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -215,7 +215,7 @@ func (m *Manager) ExportState(ctx context.Context, org, project, stack string, v
 		return nil, err
 	}
 	if state == nil {
-		return nil, fmt.Errorf("stack not found")
+		return nil, errors.New("stack not found")
 	}
 
 	// Cache current state (we need to compress it first since store returns uncompressed).
@@ -250,7 +250,7 @@ func (m *Manager) ExportStateCompressed(ctx context.Context, org, project, stack
 			return nil, false, err
 		}
 		if st == nil {
-			return nil, false, fmt.Errorf("stack not found")
+			return nil, false, errors.New("stack not found")
 		}
 		ver = st.Version
 	}
@@ -290,7 +290,7 @@ func (m *Manager) ImportState(ctx context.Context, org, project, stack string, d
 		return err
 	}
 	if st == nil {
-		return fmt.Errorf("stack not found")
+		return errors.New("stack not found")
 	}
 
 	newVersion := st.Version + 1
@@ -333,8 +333,11 @@ func (m *Manager) CreateUpdate(ctx context.Context, org, project, stack, kind st
 	if active != nil {
 		// Check if the lease has expired.
 		if active.Status == "in-progress" && time.Now().After(active.TokenExpiresAt) {
-			// Auto-cancel expired update.
-			m.store.CancelUpdate(ctx, active.ID)
+			// Auto-cancel expired update. If cancel fails, abort so the next
+			// attempt retries cleanup rather than leaving a stale record.
+			if err := m.store.CancelUpdate(ctx, active.ID); err != nil {
+				return nil, fmt.Errorf("cancel expired update %s: %w", active.ID, err)
+			}
 			m.releaseStackLock(org, project, stack)
 			m.activeUpdates.Add(-1)
 		} else if active.Status != "not-started" || !time.Now().After(active.TokenExpiresAt.Add(m.leaseDuration)) {
@@ -384,7 +387,7 @@ func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[str
 
 	// Acquire stack lock.
 	if !m.tryAcquireStackLock(u.OrgName, u.ProjectName, u.StackName, updateID) {
-		return nil, fmt.Errorf("stack is locked by another update")
+		return nil, errors.New("stack is locked by another update")
 	}
 
 	// Get next version.
@@ -395,13 +398,18 @@ func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[str
 	}
 	if st == nil {
 		m.releaseStackLock(u.OrgName, u.ProjectName, u.StackName)
-		return nil, fmt.Errorf("stack not found")
+		return nil, errors.New("stack not found")
 	}
 	newVersion := st.Version + 1
 
-	// Update tags if provided.
+	// Update tags if provided. Fail-fast: the upstream handles this atomically,
+	// so if tags can't be persisted the CLI should retry rather than proceed
+	// with stale metadata.
 	if len(tags) > 0 {
-		m.store.UpdateStackTags(ctx, u.OrgName, u.ProjectName, u.StackName, tags)
+		if err := m.store.UpdateStackTags(ctx, u.OrgName, u.ProjectName, u.StackName, tags); err != nil {
+			m.releaseStackLock(u.OrgName, u.ProjectName, u.StackName)
+			return nil, fmt.Errorf("update stack tags: %w", err)
+		}
 	}
 
 	// Generate lease token.
@@ -432,14 +440,16 @@ func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[str
 
 func (m *Manager) CompleteUpdate(ctx context.Context, updateID string, status string, result json.RawMessage) error {
 	// Flush any buffered events for this update before completing.
-	m.flushEvents(ctx)
+	if err := m.flushEvents(ctx); err != nil {
+		slog.Warn("failed to flush events before completing update", "error", err)
+	}
 
 	u, err := m.store.GetUpdate(ctx, updateID)
 	if err != nil {
 		return err
 	}
 	if u == nil {
-		return fmt.Errorf("update not found")
+		return errors.New("update not found")
 	}
 
 	// If journaling was used, replay journal to reconstruct final state.
@@ -543,7 +553,7 @@ func (m *Manager) CancelUpdate(ctx context.Context, org, project, stack string) 
 		return err
 	}
 	if active == nil {
-		return fmt.Errorf("no active update to cancel")
+		return errors.New("no active update to cancel")
 	}
 	err = m.store.CancelUpdate(ctx, active.ID)
 	if err != nil {
@@ -570,7 +580,7 @@ func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deploymen
 		return err
 	}
 	if u == nil {
-		return fmt.Errorf("update not found")
+		return errors.New("update not found")
 	}
 
 	// Compress before saving.
@@ -637,7 +647,7 @@ func (m *Manager) SaveCheckpointDelta(ctx context.Context, updateID string, expe
 		return err
 	}
 	if u == nil {
-		return fmt.Errorf("update not found")
+		return errors.New("update not found")
 	}
 
 	// Get current state to apply delta.
@@ -683,7 +693,9 @@ func (m *Manager) SaveJournalEntries(ctx context.Context, updateID string, entri
 		var entry struct {
 			SequenceID int64 `json:"sequenceID"`
 		}
-		json.Unmarshal(raw, &entry)
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			slog.Warn("failed to extract sequenceID from journal entry", "error", err)
+		}
 		seq := entry.SequenceID
 		if seq == 0 {
 			maxSeq++
@@ -707,7 +719,9 @@ func (m *Manager) SaveEngineEvents(ctx context.Context, updateID string, events 
 		var ev struct {
 			Sequence int `json:"sequence"`
 		}
-		json.Unmarshal(raw, &ev)
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			slog.Warn("failed to extract sequence from engine event", "error", err)
+		}
 		storageEvents[i] = storage.EngineEvent{
 			UpdateID: updateID,
 			Sequence: ev.Sequence,
@@ -730,7 +744,7 @@ func (m *Manager) GetEngineEvents(ctx context.Context, updateID string, offset, 
 	// Flush buffered events and read while holding the lock so no concurrent
 	// flush can start between our flush and our SQLite read.
 	m.eventMu.Lock()
-	m.flushEventsLocked(ctx)
+	_ = m.flushEventsLocked(ctx)
 	events, err := m.store.GetEngineEvents(ctx, updateID, offset, count)
 	m.eventMu.Unlock()
 	return events, err
@@ -768,9 +782,9 @@ func (m *Manager) eventFlusher(interval time.Duration) {
 	for {
 		select {
 		case <-ticker.C:
-			m.flushEvents(context.Background())
+			_ = m.flushEvents(context.Background())
 		case <-m.flushStop:
-			m.flushEvents(context.Background())
+			_ = m.flushEvents(context.Background())
 			return
 		}
 	}
@@ -873,13 +887,13 @@ func (m *Manager) ValidateUpdateToken(ctx context.Context, updateID, token strin
 		return err
 	}
 	if u == nil {
-		return fmt.Errorf("update not found")
+		return errors.New("update not found")
 	}
 	if u.Token != token {
-		return fmt.Errorf("invalid update token")
+		return errors.New("invalid update token")
 	}
 	if time.Now().After(u.TokenExpiresAt) {
-		return fmt.Errorf("update token expired")
+		return errors.New("update token expired")
 	}
 	return nil
 }
@@ -890,7 +904,7 @@ func (m *Manager) ValidateUpdateToken(ctx context.Context, updateID, token strin
 // Returns the path to the backup file.
 func (m *Manager) Backup(ctx context.Context) (string, error) {
 	if m.backupDir == "" {
-		return "", fmt.Errorf("backup directory not configured (use -backup-dir flag)")
+		return "", errors.New("backup directory not configured (use -backup-dir flag)")
 	}
 	path := filepath.Join(m.backupDir, fmt.Sprintf("backup-%s.db", time.Now().Format("20060102-150405")))
 	return path, m.store.Backup(ctx, path)

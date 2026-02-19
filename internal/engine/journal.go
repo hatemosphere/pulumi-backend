@@ -4,10 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
-
-	"encoding/json"
 
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
