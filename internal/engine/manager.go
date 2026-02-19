@@ -204,28 +204,45 @@ func (m *Manager) ExportState(ctx context.Context, org, project, stack string, v
 		}
 	}
 
-	var state *storage.StackState
+	var data []byte
+	var isCompressed bool
 	var err error
+
 	if version != nil {
-		state, err = m.store.GetStateVersion(ctx, org, project, stack, *version)
+		data, isCompressed, err = m.store.GetStateVersionRaw(ctx, org, project, stack, *version)
 	} else {
-		state, err = m.store.GetCurrentState(ctx, org, project, stack)
+		// GetCurrentStateRaw returns version too, but we only need data + isCompressed
+		var ver int
+		data, ver, isCompressed, err = m.store.GetCurrentStateRaw(ctx, org, project, stack)
+		_ = ver
 	}
 	if err != nil {
 		return nil, err
 	}
-	if state == nil {
+	if data == nil {
 		return nil, errors.New("stack not found")
 	}
 
-	// Cache current state (we need to compress it first since store returns uncompressed).
+	// Cache logic:
+	// If compressed in DB -> Cache directly.
+	// If uncompressed in DB -> Compress then Cache.
 	if version == nil {
-		compressed, err := compress(state.Deployment)
-		if err == nil {
-			m.cache.Add(key, compressed)
+		if isCompressed {
+			m.cache.Add(key, data)
+		} else {
+			if compressed, err := compress(data); err == nil {
+				m.cache.Add(key, compressed)
+			}
 		}
 	}
-	return state.Deployment, nil
+
+	// Return logic:
+	// If was compressed -> Decompress to return.
+	// If was uncompressed -> Return as is.
+	if isCompressed {
+		return decompress(data)
+	}
+	return data, nil
 }
 
 // ExportStateCompressed returns raw deployment bytes, potentially still gzip-compressed.

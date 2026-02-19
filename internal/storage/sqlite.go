@@ -577,16 +577,77 @@ func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 }
 
 // countResources extracts the resource count from an uncompressed deployment JSON.
+// countResources extracts the resource count from an uncompressed deployment JSON
+// using a streaming decoder to avoid loading the entire document into memory.
 func countResources(deployment []byte) int {
-	var doc struct {
-		Deployment struct {
-			Resources []json.RawMessage `json:"resources"`
-		} `json:"deployment"`
+	dec := json.NewDecoder(bytes.NewReader(deployment))
+
+	// We expect: {"deployment": {"resources": [ ... ]}}
+	// Simple state machine to find "resources" array.
+
+	for {
+		t, err := dec.Token()
+		if err != nil {
+			return 0
+		}
+
+		// If we find "resources" key
+		if s, ok := t.(string); ok && s == "resources" {
+			// Next token must be '['
+			t, err := dec.Token()
+			if err != nil {
+				return 0
+			}
+			if delim, ok := t.(json.Delim); ok && delim == '[' {
+				// Count elements in array
+				count := 0
+				for dec.More() {
+					// Skip the resource object
+					if err := skipValue(dec); err != nil {
+						return 0
+					}
+					count++
+				}
+				return count
+			}
+		}
 	}
-	if json.Unmarshal(deployment, &doc) == nil {
-		return len(doc.Deployment.Resources)
+}
+
+// skipValue skips the next JSON value (object, array, or primitive)
+func skipValue(dec *json.Decoder) error {
+	t, err := dec.Token()
+	if err != nil {
+		return err
 	}
-	return 0
+	if delim, ok := t.(json.Delim); ok {
+		switch delim {
+		case '{':
+			for dec.More() {
+				if err := skipValue(dec); err != nil { // Key
+					return err
+				}
+				if err := skipValue(dec); err != nil { // Value
+					return err
+				}
+			}
+			// Consume closing '}'
+			if _, err := dec.Token(); err != nil {
+				return err
+			}
+		case '[':
+			for dec.More() {
+				if err := skipValue(dec); err != nil {
+					return err
+				}
+			}
+			// Consume closing ']'
+			if _, err := dec.Token(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // --- Updates ---
