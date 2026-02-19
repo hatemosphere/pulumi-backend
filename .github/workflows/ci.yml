@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  checks: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,8 +30,27 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+
       - name: Unit tests
-        run: go test -timeout 120s ./internal/... -count=1
+        run: gotestsum --junitfile unit-results.xml -- -timeout 120s ./internal/... -count=1
+
+      - name: Test report
+        uses: mikepenz/action-junit-report@74626db7353a25a20a72816467ebf035f674c5f8 # v6.2.0
+        if: always()
+        with:
+          report_paths: unit-results.xml
+          check_name: Unit Test Results
+          include_passed: true
+          job_summary: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: always()
+        with:
+          name: unit-test-results
+          path: unit-results.xml
 
   test-api:
     runs-on: ubuntu-latest
@@ -39,11 +61,30 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+
       - name: Download upstream spec
         run: curl -sfo pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json
 
       - name: HTTP API and spec compliance tests
-        run: go test -timeout 120s ./tests/ -run 'Test[^C][^L][^I]' -count=1
+        run: gotestsum --junitfile api-results.xml -- -timeout 120s ./tests/ -run 'Test[^C][^L][^I]' -count=1
+
+      - name: Test report
+        uses: mikepenz/action-junit-report@74626db7353a25a20a72816467ebf035f674c5f8 # v6.2.0
+        if: always()
+        with:
+          report_paths: api-results.xml
+          check_name: API Test Results
+          include_passed: true
+          job_summary: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: always()
+        with:
+          name: api-test-results
+          path: api-results.xml
 
   test-cli:
     runs-on: ubuntu-latest
@@ -58,8 +99,27 @@ jobs:
         with:
           pulumi-version: 3.222.0
 
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+
       - name: Download upstream spec
         run: curl -sfo pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json
 
       - name: All tests (including CLI integration)
-        run: go test -timeout 600s ./tests/ -count=1
+        run: gotestsum --junitfile cli-results.xml -- -timeout 600s ./tests/ -count=1
+
+      - name: Test report
+        uses: mikepenz/action-junit-report@74626db7353a25a20a72816467ebf035f674c5f8 # v6.2.0
+        if: always()
+        with:
+          report_paths: cli-results.xml
+          check_name: CLI Test Results
+          include_passed: true
+          job_summary: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: always()
+        with:
+          name: cli-test-results
+          path: cli-results.xml
