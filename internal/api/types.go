@@ -122,17 +122,8 @@ type RequestedBy struct {
 }
 
 // UpdateSummary is an update entry in history list responses.
-type UpdateSummary struct {
-	Kind            string            `json:"kind"`
-	Result          string            `json:"result"`
-	Message         string            `json:"message"`
-	Version         int               `json:"version"`
-	StartTime       int64             `json:"startTime"`
-	EndTime         *int64            `json:"endTime,omitempty"`
-	ResourceChanges json.RawMessage   `json:"resourceChanges,omitempty"`
-	Environment     map[string]string `json:"environment,omitempty"`
-	Config          map[string]any    `json:"config,omitempty"`
-}
+// Identical to UpdateInfo — defined as a type alias for clarity.
+type UpdateSummary = UpdateInfo
 
 // --- Capabilities ---
 
@@ -541,6 +532,22 @@ type UpdateStackConfigInput struct {
 type HealthCheckOutput struct {
 	Body struct {
 		Status string `json:"status"`
+	}
+}
+
+// --- Auth ---
+
+type GoogleTokenExchangeInput struct {
+	Body struct {
+		IDToken string `json:"idToken"`
+	}
+}
+
+type GoogleTokenExchangeOutput struct {
+	Body struct {
+		Token     string `json:"accessToken"` //nolint:gosec // JSON API field, not a credential
+		UserName  string `json:"userName"`
+		ExpiresAt int64  `json:"expiresAt"`
 	}
 }
 

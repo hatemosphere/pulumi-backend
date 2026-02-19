@@ -327,8 +327,6 @@ func replayJournalEntries(base checkpoint, entries []journalEntry) (checkpoint, 
 
 // rebuildDependencies prunes dangling dependency references from resources.
 // This is necessary after refresh operations which may delete resources.
-// rebuildDependencies prunes dangling dependency references from resources.
-// This is necessary after refresh operations which may delete resources.
 func rebuildDependencies(resources []json.RawMessage) {
 	// Collect all URNs present in the final resource set.
 	urnSet := make(map[string]bool, len(resources))

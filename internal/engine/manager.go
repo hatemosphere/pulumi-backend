@@ -676,15 +676,9 @@ func (m *Manager) SaveCheckpointDelta(ctx context.Context, updateID string, expe
 
 func (m *Manager) SaveJournalEntries(ctx context.Context, updateID string, entries []json.RawMessage) error {
 	// Get the current max sequence for this update.
-	existing, err := m.store.GetJournalEntries(ctx, updateID)
+	maxSeq, err := m.store.GetMaxJournalSequence(ctx, updateID)
 	if err != nil {
 		return err
-	}
-	var maxSeq int64
-	for _, e := range existing {
-		if e.SequenceID > maxSeq {
-			maxSeq = e.SequenceID
-		}
 	}
 
 	storageEntries := make([]storage.JournalEntry, len(entries))
@@ -829,7 +823,7 @@ func (m *Manager) getOrCreateSecretsKey(ctx context.Context, org, project, stack
 		return nil, err
 	}
 	if existing != nil {
-		decrypted, err := m.secrets.DecryptKey(existing)
+		decrypted, err := m.secrets.DecryptKey(ctx, existing)
 		if err != nil {
 			return nil, err
 		}
@@ -838,7 +832,7 @@ func (m *Manager) getOrCreateSecretsKey(ctx context.Context, org, project, stack
 	}
 
 	// Generate a new per-stack key and encrypt it with the master key.
-	stackKey, encryptedStackKey, err := m.secrets.GenerateStackKey()
+	stackKey, encryptedStackKey, err := m.secrets.GenerateStackKey(ctx)
 	if err != nil {
 		return nil, err
 	}

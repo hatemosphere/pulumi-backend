@@ -5,6 +5,9 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/hatemosphere/pulumi-backend/internal/auth"
+	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
 func (s *Server) registerUser(api huma.API) {
@@ -14,9 +17,17 @@ func (s *Server) registerUser(api huma.API) {
 		Path:        "/api/user",
 		Tags:        []string{"User"},
 	}, func(ctx context.Context, input *struct{}) (*GetUserOutput, error) {
+		identity := auth.IdentityFromContext(ctx)
+		userName := s.defaultUser
+		isAdmin := true
+		if identity != nil {
+			userName = identity.UserName
+			isAdmin = identity.IsAdmin
+		}
+
 		out := &GetUserOutput{}
-		out.Body.GitHubLogin = s.defaultUser
-		out.Body.Name = s.defaultUser
+		out.Body.GitHubLogin = userName
+		out.Body.Name = userName
 		out.Body.AvatarURL = ""
 		out.Body.Organizations = []any{
 			map[string]any{
@@ -26,7 +37,7 @@ func (s *Server) registerUser(api huma.API) {
 			},
 		}
 		out.Body.Identities = []string{}
-		out.Body.SiteAdmin = true
+		out.Body.SiteAdmin = isAdmin
 		out.Body.TokenInfo = &TokenInfo{Name: "default"}
 		return out, nil
 	})
@@ -42,20 +53,8 @@ func (s *Server) registerUser(api huma.API) {
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
 		}
 
-		result := make([]StackSummary, 0, len(stacks))
-		for _, st := range stacks {
-			result = append(result, StackSummary{
-				OrgName:       st.OrgName,
-				ProjectName:   st.ProjectName,
-				StackName:     st.StackName,
-				LastUpdate:    st.UpdatedAt.Unix(),
-				ResourceCount: st.ResourceCount,
-				Tags:          st.Tags,
-			})
-		}
-
 		out := &ListUserStacksOutput{}
-		out.Body.Stacks = result
+		out.Body.Stacks = stacksToSummaries(stacks, true)
 		if nextToken != "" {
 			out.Body.ContinuationToken = &nextToken
 		}
@@ -85,22 +84,31 @@ func (s *Server) registerUser(api huma.API) {
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
 		}
 
-		result := make([]StackSummary, 0, len(stacks))
-		for _, st := range stacks {
-			result = append(result, StackSummary{
-				OrgName:       st.OrgName,
-				ProjectName:   st.ProjectName,
-				StackName:     st.StackName,
-				LastUpdate:    st.UpdatedAt.Unix(),
-				ResourceCount: st.ResourceCount,
-			})
-		}
-
 		out := &ListOrgStacksOutput{}
-		out.Body.Stacks = result
+		out.Body.Stacks = stacksToSummaries(stacks, false)
 		if nextToken != "" {
 			out.Body.ContinuationToken = &nextToken
 		}
 		return out, nil
 	})
+}
+
+// stacksToSummaries converts storage stacks to API StackSummary values.
+// When includeTags is true, per-stack tags are included in the output.
+func stacksToSummaries(stacks []storage.Stack, includeTags bool) []StackSummary {
+	result := make([]StackSummary, 0, len(stacks))
+	for _, st := range stacks {
+		s := StackSummary{
+			OrgName:       st.OrgName,
+			ProjectName:   st.ProjectName,
+			StackName:     st.StackName,
+			LastUpdate:    st.UpdatedAt.Unix(),
+			ResourceCount: st.ResourceCount,
+		}
+		if includeTags {
+			s.Tags = st.Tags
+		}
+		result = append(result, s)
+	}
+	return result
 }

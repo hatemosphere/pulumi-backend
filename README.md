@@ -1,6 +1,6 @@
 # pulumi-backend
 
-A self-hosted Pulumi state backend that implements the Pulumi Cloud HTTP API. Single binary, SQLite storage, no cloud dependencies.
+A self-hosted Pulumi state backend that implements the Pulumi Cloud HTTP API. Single binary, SQLite storage, no cloud dependencies required.
 
 ## Why
 
@@ -16,26 +16,29 @@ This backend speaks the same HTTP protocol as Pulumi Cloud, so the CLI uses its 
 | **Checkpoint updates** | Full state upload every time | Delta checkpoints (text diffs with SHA-256 verification) when state > 1MB |
 | **Journaling** | Not supported | Server-side journal replay — CLI sends per-resource entries instead of full snapshots |
 | **Concurrency** | Advisory file locks (missing on some backends, no TTL) | Server-side update locking with lease renewal and cancel support |
-| **Secrets** | Client-side (passphrase or KMS) | Server-side AES-256-GCM, batch encrypt/decrypt |
+| **Secrets** | Client-side (passphrase or KMS) | Server-side AES-256-GCM with optional GCP KMS key wrapping |
 | **State compression** | None | Gzip-compressed deployment storage in SQLite |
 | **Listing/querying** | Walk the bucket listing files | SQL queries with pagination |
+| **Auth** | None | Single-tenant, Google OIDC, or JWT with RBAC |
 
 ## Usage
 
-```
+```bash
 go build -o pulumi-backend ./cmd/pulumi-backend
 ./pulumi-backend
 ```
 
 Then point the CLI at it:
 
-```
+```bash
 pulumi login http://localhost:8080
 ```
 
 ### Configuration
 
-Flags and environment variables:
+All flags have corresponding environment variables with the `PULUMI_BACKEND_` prefix.
+
+#### Core
 
 | Flag | Env | Default | Description |
 |---|---|---|---|
@@ -47,6 +50,13 @@ Flags and environment variables:
 | `-tls` | | `false` | Enable TLS |
 | `-cert` | | | TLS certificate file |
 | `-key` | | | TLS key file |
+
+If no master key is provided, one is auto-generated and printed to stderr. Persist it if you want secrets to survive restarts.
+
+#### Performance tuning
+
+| Flag | Env | Default | Description |
+|---|---|---|---|
 | `-lease-duration` | `PULUMI_BACKEND_LEASE_DURATION` | `5m` | Update lease TTL |
 | `-cache-size` | `PULUMI_BACKEND_CACHE_SIZE` | `256` | LRU cache size for deployment snapshots |
 | `-delta-cutoff` | `PULUMI_BACKEND_DELTA_CUTOFF` | `1048576` | Checkpoint size threshold for delta mode (bytes) |
@@ -55,9 +65,65 @@ Flags and environment variables:
 | `-stack-list-page-size` | `PULUMI_BACKEND_STACK_LIST_PAGE_SIZE` | `100` | Page size for stack listings |
 | `-event-buffer-size` | `PULUMI_BACKEND_EVENT_BUFFER_SIZE` | `1000` | Max buffered events before forced flush |
 | `-event-flush-interval` | `PULUMI_BACKEND_EVENT_FLUSH_INTERVAL` | `1s` | Periodic event flush interval |
-| `-backup-dir` | `PULUMI_BACKEND_BACKUP_DIR` | (disabled) | Directory for database backups |
+| `-backup-dir` | `PULUMI_BACKEND_BACKUP_DIR` | (disabled) | Directory for SQLite VACUUM INTO backups |
 
-If no master key is provided, one is auto-generated and printed to stderr. Persist it if you want secrets to survive restarts.
+#### Secrets provider
+
+| Flag | Env | Default | Description |
+|---|---|---|---|
+| `-secrets-provider` | `PULUMI_BACKEND_SECRETS_PROVIDER` | `local` | `local` (AES-256-GCM with master key) or `gcpkms` |
+| `-kms-key` | `PULUMI_BACKEND_KMS_KEY` | | GCP KMS key resource name (required for `gcpkms`) |
+
+#### Authentication
+
+| Flag | Env | Default | Description |
+|---|---|---|---|
+| `-auth-mode` | `PULUMI_BACKEND_AUTH_MODE` | `single-tenant` | `single-tenant`, `google`, or `jwt` |
+
+**Google OIDC mode** (`-auth-mode=google`):
+
+| Flag | Env | Description |
+|---|---|---|
+| `-google-client-id` | `PULUMI_BACKEND_GOOGLE_CLIENT_ID` | OAuth2 client ID (required) |
+| `-google-sa-key` | `PULUMI_BACKEND_GOOGLE_SA_KEY` | Service account JSON key for Admin SDK groups |
+| `-google-admin-email` | `PULUMI_BACKEND_GOOGLE_ADMIN_EMAIL` | Workspace super-admin email for groups impersonation |
+| `-google-allowed-domains` | `PULUMI_BACKEND_GOOGLE_ALLOWED_DOMAINS` | Comma-separated allowed hosted domains |
+| `-google-transitive-groups` | `PULUMI_BACKEND_GOOGLE_TRANSITIVE_GROUPS` | Resolve nested group memberships |
+| `-token-ttl` | `PULUMI_BACKEND_TOKEN_TTL` | Backend-issued token lifetime (default `24h`) |
+| `-groups-cache-ttl` | `PULUMI_BACKEND_GROUPS_CACHE_TTL` | Group membership cache TTL (default `5m`) |
+
+**JWT mode** (`-auth-mode=jwt`):
+
+| Flag | Env | Description |
+|---|---|---|
+| `-jwt-signing-key` | `PULUMI_BACKEND_JWT_SIGNING_KEY` | HMAC secret or path to PEM public key (required) |
+| `-jwt-issuer` | `PULUMI_BACKEND_JWT_ISSUER` | Expected `iss` claim (optional) |
+| `-jwt-audience` | `PULUMI_BACKEND_JWT_AUDIENCE` | Expected `aud` claim (optional) |
+| `-jwt-groups-claim` | `PULUMI_BACKEND_JWT_GROUPS_CLAIM` | Claim name for groups (default `groups`) |
+| `-jwt-username-claim` | `PULUMI_BACKEND_JWT_USERNAME_CLAIM` | Claim for username (default `sub`) |
+
+#### RBAC
+
+| Flag | Env | Description |
+|---|---|---|
+| `-rbac-config` | `PULUMI_BACKEND_RBAC_CONFIG` | Path to RBAC config YAML (disabled if not set) |
+
+Example `rbac.yaml`:
+
+```yaml
+defaultPermission: read
+groupRoles:
+  - group: "engineers@example.com"
+    permission: write
+  - group: "ops@example.com"
+    permission: admin
+stackPolicies:
+  - group: "engineers@example.com"
+    stackPattern: "myorg/staging/*"
+    permission: admin
+```
+
+Permission levels: `none < read < write < admin`. Single-tenant mode bypasses RBAC entirely.
 
 ## API compatibility
 
@@ -69,53 +135,26 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 - Delta checkpoint uploads (v2) with server-side patching
 - Journal entries with server-side replay
 - Batch encrypt/decrypt
-- Update history
-- User/org endpoints (single-tenant, accepts any token)
+- Update history with pagination
+- User/org endpoints
+- Authentication (single-tenant, Google OIDC, JWT)
+- RBAC (group-based, with stack-level policy overrides)
 - Prometheus metrics (`/metrics`)
-- OpenAPI 3.0 spec (`GET /api/openapi`)
+- OpenAPI 3.1 spec (`GET /api/openapi`)
 - Database backup (`POST /api/admin/backup`)
 
 ## Tests
 
 ```bash
-go test ./...                                             # full suite (CLI tests need pulumi in PATH)
-go test ./tests/ -skip '^TestCLI'                         # HTTP API tests only (no pulumi needed)
-go test ./tests/ -run TestCLI                              # CLI integration tests
-go test -v ./tests/ -run TestAPISpecSchemaCompliance       # OpenAPI spec compliance
+go test ./internal/...                                   # unit tests
+go test ./tests/ -skip '^TestCLI'                        # HTTP API + auth integration tests (no pulumi needed)
+go test ./tests/ -run TestCLI                             # CLI integration tests (requires pulumi in PATH)
+go test -v ./tests/ -run TestAPISpecSchemaCompliance      # OpenAPI spec compliance
+go test -timeout 600s ./tests/ -count=1                   # full suite
 ```
-
-**Spec coverage report** (compares against upstream Pulumi Cloud spec):
-
-```bash
-curl -o pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json
-go test -v -run TestAPISpecCoverage ./tests/
-```
-
-**GCS benchmark** (requires `GOOGLE_CLOUD_PROJECT` and GCP Application Default Credentials):
-
-```bash
-RUN_GCS_BENCHMARK=1 go test -v -run TestBenchmarkBackendComparison -timeout 600s ./tests/
-```
-
-## Performance optimizations status
-
-| Optimization | Status | Notes |
-|---|---|---|
-| In-memory snapshot cache (LRU) | Done | Configurable LRU cache (default 256 entries), invalidated on update/delete/rename |
-| Gzip-compressed state storage | Done | Transparent compress on write, decompress on read, handles legacy uncompressed rows |
-| Delta checkpoint uploads | Done | Text diffs with SHA-256 verification, configurable cutoff (default 1MB) |
-| Server-side journal replay | Done | CLI sends per-resource entries, server reconstructs full snapshot on completion |
-| Single-connection WAL mode | Done | `MaxOpenConns=1`, WAL for concurrent reads during writes |
-| In-memory stack locks | Done | `sync.Map`-based locks with expiry, lease renewal updates in-memory expiry |
-| Zero-copy gzip export | Done | Serves compressed bytes directly from SQLite with `Content-Encoding: gzip` |
-| Async event batching | Done | Events buffered in memory, flushed periodically or when buffer is full |
 
 ## TODO
 
 - [ ] Dockerfile
-- [ ] CI pipeline (GitHub Actions: build, test, lint)
-- [ ] Health check that verifies DB connectivity (`SELECT 1` or `PRAGMA quick_check`)
-- [ ] Multi-tenancy, auth, multi-user, RBAC?
 - [ ] Web UI
-- [ ] SQLite means single-node (no horizontal scaling, HA)
-
+- [ ] Horizontal scaling beyond single SQLite node

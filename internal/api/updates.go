@@ -6,9 +6,13 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/hatemosphere/pulumi-backend/internal/auth"
+	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
 func (s *Server) registerUpdates(api huma.API) {
@@ -298,6 +302,37 @@ func (s *Server) registerUpdates(api huma.API) {
 
 // --- History ---
 
+// historyToUpdateInfo converts a storage.UpdateHistory to an UpdateInfo.
+func historyToUpdateInfo(h *storage.UpdateHistory) UpdateInfo {
+	info := UpdateInfo{
+		Kind:      h.Kind,
+		Result:    h.Status,
+		Message:   h.Message,
+		Version:   h.Version,
+		StartTime: h.StartTime.Unix(),
+	}
+	if h.EndTime != nil {
+		endTime := h.EndTime.Unix()
+		info.EndTime = &endTime
+	}
+	if len(h.ResourceChanges) > 0 {
+		info.ResourceChanges = json.RawMessage(h.ResourceChanges)
+	}
+	if len(h.Environment) > 0 {
+		var env map[string]string
+		if json.Unmarshal(h.Environment, &env) == nil {
+			info.Environment = env
+		}
+	}
+	if len(h.Config) > 0 {
+		var cfg map[string]any
+		if json.Unmarshal(h.Config, &cfg) == nil {
+			info.Config = cfg
+		}
+	}
+	return info
+}
+
 func (s *Server) registerHistory(api huma.API) {
 	huma.Register(api, huma.Operation{
 		OperationID: "getUpdates",
@@ -317,33 +352,8 @@ func (s *Server) registerHistory(api huma.API) {
 
 		updates := make([]UpdateSummary, 0, len(history))
 		for _, h := range history {
-			u := UpdateSummary{
-				Kind:      h.Kind,
-				Result:    h.Status,
-				Message:   h.Message,
-				Version:   h.Version,
-				StartTime: h.StartTime.Unix(),
-			}
-			if h.EndTime != nil {
-				endTime := h.EndTime.Unix()
-				u.EndTime = &endTime
-			}
-			if len(h.ResourceChanges) > 0 {
-				u.ResourceChanges = json.RawMessage(h.ResourceChanges)
-			}
-			if len(h.Environment) > 0 {
-				var env map[string]string
-				if json.Unmarshal(h.Environment, &env) == nil {
-					u.Environment = env
-				}
-			}
-			if len(h.Config) > 0 {
-				var cfg map[string]any
-				if json.Unmarshal(h.Config, &cfg) == nil {
-					u.Config = cfg
-				}
-			}
-			updates = append(updates, u)
+			info := historyToUpdateInfo(&h)
+			updates = append(updates, info)
 		}
 
 		out := &GetUpdatesOutput{}
@@ -366,26 +376,8 @@ func (s *Server) registerHistory(api huma.API) {
 		}
 
 		h := history[0]
-		info := UpdateInfo{
-			Kind:      h.Kind,
-			Result:    h.Status,
-			Message:   h.Message,
-			Version:   h.Version,
-			StartTime: h.StartTime.Unix(),
-		}
-		if h.EndTime != nil {
-			endTime := h.EndTime.Unix()
-			info.EndTime = &endTime
-		}
-		if len(h.Config) > 0 {
-			var cfg map[string]any
-			if json.Unmarshal(h.Config, &cfg) == nil {
-				info.Config = cfg
-			}
-		}
-
 		out := &GetLatestUpdateOutput{}
-		out.Body.Info = info
+		out.Body.Info = historyToUpdateInfo(&h)
 		out.Body.UpdateID = h.UpdateID
 		out.Body.Version = h.Version
 		out.Body.LatestVersion = h.Version
@@ -411,23 +403,8 @@ func (s *Server) registerHistory(api huma.API) {
 			return nil, huma.NewError(http.StatusNotFound, "update not found")
 		}
 
-		info := UpdateInfo{
-			Kind:      h.Kind,
-			Result:    h.Status,
-			Message:   h.Message,
-			Version:   h.Version,
-			StartTime: h.StartTime.Unix(),
-		}
-		if h.EndTime != nil {
-			endTime := h.EndTime.Unix()
-			info.EndTime = &endTime
-		}
-		if len(h.ResourceChanges) > 0 {
-			info.ResourceChanges = json.RawMessage(h.ResourceChanges)
-		}
-
 		out := &GetUpdateByVersionOutput{}
-		out.Body.Info = info
+		out.Body.Info = historyToUpdateInfo(h)
 		out.Body.UpdateID = h.UpdateID
 		out.Body.Version = h.Version
 		out.Body.LatestVersion = h.Version
@@ -449,6 +426,10 @@ func (s *Server) registerAdmin(api huma.API) {
 		Path:        "/api/admin/backup",
 		Tags:        []string{"Admin"},
 	}, func(ctx context.Context, input *struct{}) (*CreateBackupOutput, error) {
+		identity := auth.IdentityFromContext(ctx)
+		if identity == nil || !identity.IsAdmin {
+			return nil, huma.NewError(http.StatusForbidden, "admin access required")
+		}
 		path, err := s.engine.Backup(ctx)
 		if err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
@@ -464,5 +445,5 @@ func ucfirst(s string) string {
 	if s == "" {
 		return s
 	}
-	return string(s[0]-32) + s[1:]
+	return strings.ToUpper(s[:1]) + s[1:]
 }

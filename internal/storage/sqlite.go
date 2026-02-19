@@ -722,6 +722,14 @@ func (s *SQLiteStore) GetJournalEntries(ctx context.Context, updateID string) ([
 	return entries, nil
 }
 
+func (s *SQLiteStore) GetMaxJournalSequence(ctx context.Context, updateID string) (int64, error) {
+	var maxSeq int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(sequence_id), 0) FROM journal_entries WHERE update_id=?`,
+		updateID).Scan(&maxSeq)
+	return maxSeq, err
+}
+
 // --- Engine Events ---
 
 func (s *SQLiteStore) SaveEngineEvents(ctx context.Context, events []EngineEvent) error {
@@ -891,6 +899,43 @@ func (s *SQLiteStore) TouchToken(ctx context.Context, tokenHash string) error {
 		`UPDATE tokens SET last_used_at=? WHERE token_hash=?`,
 		time.Now().Unix(), tokenHash)
 	return err
+}
+
+func (s *SQLiteStore) DeleteToken(ctx context.Context, tokenHash string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM tokens WHERE token_hash=?`, tokenHash)
+	return err
+}
+
+func (s *SQLiteStore) ListTokensByUser(ctx context.Context, userName string) ([]Token, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT token_hash, user_name, description, created_at, last_used_at, expires_at
+		 FROM tokens WHERE user_name=? ORDER BY created_at DESC`, userName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tokens []Token
+	for rows.Next() {
+		var t Token
+		var createdAt int64
+		var lastUsedAt, expiresAt *int64
+		if err := rows.Scan(&t.TokenHash, &t.UserName, &t.Description, &createdAt, &lastUsedAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		t.CreatedAt = time.Unix(createdAt, 0)
+		if lastUsedAt != nil {
+			lu := time.Unix(*lastUsedAt, 0)
+			t.LastUsedAt = &lu
+		}
+		if expiresAt != nil {
+			ea := time.Unix(*expiresAt, 0)
+			t.ExpiresAt = &ea
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens, rows.Err()
 }
 
 // --- Secrets Keys ---

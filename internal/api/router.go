@@ -7,16 +7,17 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/klauspost/compress/gzip"
 
+	"github.com/hatemosphere/pulumi-backend/internal/auth"
 	"github.com/hatemosphere/pulumi-backend/internal/engine"
+	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
 // Server is the HTTP API server.
@@ -27,6 +28,12 @@ type Server struct {
 	deltaCutoffBytes int
 	historyPageSize  int
 	humaAPI          huma.API
+	authMode         string                    // "single-tenant" (default), "google", or "jwt"
+	tokenStore       storage.Store             // required in google auth mode
+	googleAuth       *auth.GoogleAuthenticator // required in google auth mode
+	groupsCache      *auth.GroupsCache         // optional: resolves groups in google auth mode
+	jwtAuth          *auth.JWTAuthenticator    // required in jwt auth mode
+	rbac             *auth.RBACResolver        // nil = no RBAC enforcement
 }
 
 // NewServer creates a new API server.
@@ -55,6 +62,36 @@ func WithDeltaCutoff(bytes int) ServerOption {
 // WithHistoryPageSize sets the default history page size.
 func WithHistoryPageSize(size int) ServerOption {
 	return func(s *Server) { s.historyPageSize = size }
+}
+
+// WithAuthMode sets the authentication mode ("single-tenant", "google", or "jwt").
+func WithAuthMode(mode string) ServerOption {
+	return func(s *Server) { s.authMode = mode }
+}
+
+// WithTokenStore sets the storage backend for token-based auth lookups.
+func WithTokenStore(store storage.Store) ServerOption {
+	return func(s *Server) { s.tokenStore = store }
+}
+
+// WithGoogleAuth sets the Google authenticator for token exchange.
+func WithGoogleAuth(ga *auth.GoogleAuthenticator) ServerOption {
+	return func(s *Server) { s.googleAuth = ga }
+}
+
+// WithJWTAuth sets the JWT authenticator for stateless token validation.
+func WithJWTAuth(ja *auth.JWTAuthenticator) ServerOption {
+	return func(s *Server) { s.jwtAuth = ja }
+}
+
+// WithGroupsCache sets the groups cache for resolving group memberships in google auth mode.
+func WithGroupsCache(gc *auth.GroupsCache) ServerOption {
+	return func(s *Server) { s.groupsCache = gc }
+}
+
+// WithRBAC sets the RBAC resolver for permission enforcement.
+func WithRBAC(resolver *auth.RBACResolver) ServerOption {
+	return func(s *Server) { s.rbac = resolver }
 }
 
 // humaJSONFormat uses stdlib encoding/json for huma request/response serialization.
@@ -103,40 +140,38 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// Router returns the configured chi router with all endpoints.
+// Router returns the configured HTTP handler with all endpoints.
 func (s *Server) Router() http.Handler {
-	r := chi.NewRouter()
-
-	// Middleware.
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Recoverer)
-	r.Use(slogRequestLogger)
-	r.Use(metricsMiddleware)
-	r.Use(gzipDecompressor) // Decompress gzip request bodies from CLI.
+	mux := http.NewServeMux()
 
 	// Public huma routes (no auth).
-	publicAPI := humachi.New(r, newHumaConfig())
+	publicAPI := humago.New(mux, newHumaConfig())
+	publicAPI.UseMiddleware(metricsHumaMiddleware)
 	s.registerPublicRoutes(publicAPI)
 
 	// Auth-protected API routes.
-	r.Group(func(r chi.Router) {
-		r.Use(s.authMiddleware)
+	api := humago.New(mux, newHumaConfig())
+	api.UseMiddleware(metricsHumaMiddleware)
+	api.UseMiddleware(s.authHumaMiddleware(api))
+	api.UseMiddleware(s.rbacMiddleware(api))
+	s.humaAPI = api
 
-		// Create huma API wrapping this group.
-		api := humachi.New(r, newHumaConfig())
-		s.humaAPI = api
+	// Register huma operations.
+	s.registerCapabilities(api)
+	s.registerUser(api)
+	s.registerStacks(api)
+	s.registerSecrets(api)
+	s.registerUpdates(api)
+	s.registerHistory(api)
+	s.registerAdmin(api)
 
-		// Register huma operations.
-		s.registerCapabilities(api)
-		s.registerUser(api)
-		s.registerStacks(api)
-		s.registerSecrets(api)
-		s.registerUpdates(api)
-		s.registerHistory(api)
-		s.registerAdmin(api)
-	})
-
-	return r
+	// HTTP-level middleware (outermost applied last).
+	var handler http.Handler = mux
+	handler = gzipDecompressor(handler)
+	handler = requestLogger(handler)
+	handler = recoverer(handler)
+	handler = realIP(handler)
+	return handler
 }
 
 // registerPublicRoutes registers unauthenticated huma operations.
@@ -174,6 +209,11 @@ func (s *Server) registerPublicRoutes(api huma.API) {
 		}, nil
 	})
 
+	// Google token exchange (only active in google auth mode).
+	if s.googleAuth != nil {
+		s.registerGoogleAuth(api)
+	}
+
 	// OpenAPI spec.
 	huma.Register(api, huma.Operation{
 		OperationID: "getOpenAPISpec",
@@ -195,37 +235,181 @@ func (s *Server) registerPublicRoutes(api huma.API) {
 	})
 }
 
-// authMiddleware is a simple token-based auth. Accepts any token in single-tenant mode.
-func (s *Server) authMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		if auth == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_ = stdjson.NewEncoder(w).Encode(map[string]any{
-				"code":    http.StatusUnauthorized,
-				"message": "missing Authorization header",
-			})
+// authHumaMiddleware returns a huma middleware that validates the Authorization
+// header and sets a UserIdentity on the request context. Behaviour depends on
+// the configured auth mode:
+//   - single-tenant: any valid-format token grants full admin access.
+//   - jwt: stateless JWT validation, identity + groups extracted from claims.
+//   - google: backend-issued opaque token looked up in the database.
+func (s *Server) authHumaMiddleware(api huma.API) func(ctx huma.Context, next func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		authHeader := ctx.Header("Authorization")
+		if authHeader == "" {
+			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "missing Authorization header")
 			return
 		}
 
-		// Accept both "token <xxx>" and "update-token <xxx>" formats.
-		if strings.HasPrefix(auth, "token ") || strings.HasPrefix(auth, "update-token ") {
-			next.ServeHTTP(w, r)
+		if !strings.HasPrefix(authHeader, "token ") && !strings.HasPrefix(authHeader, "update-token ") {
+			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "invalid Authorization header format")
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = stdjson.NewEncoder(w).Encode(map[string]any{
-			"code":    http.StatusUnauthorized,
-			"message": "invalid Authorization header format",
-		})
-	})
+		switch s.authMode {
+		case "jwt":
+			s.authJWTHuma(api, ctx, next, authHeader)
+		case "google":
+			s.authGoogleHuma(api, ctx, next, authHeader)
+		default: // single-tenant
+			identity := &auth.UserIdentity{
+				UserName: s.defaultUser,
+				IsAdmin:  true,
+			}
+			next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
+		}
+	}
 }
 
-// slogRequestLogger logs each HTTP request with method, path, status code, and latency.
-func slogRequestLogger(next http.Handler) http.Handler {
+// handleUpdateTokenHuma checks for "update-token" auth headers and passes
+// through with a minimal identity. Returns true if handled.
+func handleUpdateTokenHuma(ctx huma.Context, next func(huma.Context), authHeader string) bool {
+	if !strings.HasPrefix(authHeader, "update-token ") {
+		return false
+	}
+	identity := &auth.UserIdentity{
+		UserName: "update-agent",
+	}
+	next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
+	return true
+}
+
+// authJWTHuma handles JWT auth mode: stateless token validation with identity
+// and groups extracted directly from JWT claims.
+func (s *Server) authJWTHuma(api huma.API, ctx huma.Context, next func(huma.Context), authHeader string) {
+	if handleUpdateTokenHuma(ctx, next, authHeader) {
+		return
+	}
+
+	tokenValue := strings.TrimPrefix(authHeader, "token ")
+	identity, err := s.jwtAuth.Validate(tokenValue)
+	if err != nil {
+		_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "invalid JWT: "+err.Error())
+		return
+	}
+
+	next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
+}
+
+// authGoogleHuma handles Google auth mode: opaque backend-issued tokens looked
+// up in the database, with optional group resolution via the groups cache.
+func (s *Server) authGoogleHuma(api huma.API, ctx huma.Context, next func(huma.Context), authHeader string) {
+	if handleUpdateTokenHuma(ctx, next, authHeader) {
+		return
+	}
+
+	tokenValue := strings.TrimPrefix(authHeader, "token ")
+	tokenHash := auth.HashToken(tokenValue)
+
+	tok, err := s.tokenStore.GetToken(ctx.Context(), tokenHash)
+	if err != nil {
+		slog.Error("token lookup failed", "error", err)
+		_ = huma.WriteErr(api, ctx, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if tok == nil {
+		_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "invalid access token")
+		return
+	}
+	if tok.ExpiresAt != nil && tok.ExpiresAt.Before(time.Now()) {
+		_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "access token expired")
+		return
+	}
+
+	identity := &auth.UserIdentity{
+		UserName:  tok.UserName,
+		TokenHash: tokenHash,
+	}
+
+	// Resolve groups if a groups cache is available.
+	if s.groupsCache != nil {
+		groups, err := s.groupsCache.ResolveGroups(ctx.Context(), tok.UserName)
+		if err != nil {
+			slog.Warn("groups resolution failed", "user", tok.UserName, "error", err) //nolint:gosec // structured logger, not format string
+		} else {
+			identity.Groups = groups
+		}
+	}
+
+	next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
+
+	// Async touch to update last_used_at without blocking the response.
+	go func() {
+		if err := s.tokenStore.TouchToken(context.Background(), tokenHash); err != nil {
+			slog.Warn("failed to touch token", "error", err)
+		}
+	}()
+}
+
+// rbacMiddleware returns a huma middleware that enforces RBAC permissions based
+// on the request path and HTTP method. It runs after authHumaMiddleware, which
+// sets the user identity on the request context.
+func (s *Server) rbacMiddleware(api huma.API) func(ctx huma.Context, next func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		orgName := ctx.Param("orgName")
+		if orgName == "" {
+			// Non-stack-scoped endpoint (e.g. /api/user, /api/admin/backup).
+			next(ctx)
+			return
+		}
+
+		projectName := ctx.Param("projectName")
+		stackName := ctx.Param("stackName")
+		perm := requiredPermission(ctx.Method(), ctx.Operation().Path)
+
+		if err := auth.RequirePermission(ctx.Context(), s.rbac, orgName, projectName, stackName, perm); err != nil {
+			_ = huma.WriteErr(api, ctx, http.StatusForbidden, err.Error())
+			return
+		}
+		next(ctx)
+	}
+}
+
+// requiredPermission maps an HTTP method and operation path to the minimum
+// permission level required.
+func requiredPermission(method, path string) auth.Permission {
+	if method == http.MethodDelete {
+		return auth.PermissionAdmin
+	}
+	if strings.HasSuffix(path, "/rename") {
+		return auth.PermissionAdmin
+	}
+	if method == http.MethodGet || method == http.MethodHead {
+		return auth.PermissionRead
+	}
+	if strings.HasSuffix(path, "/decrypt") || strings.HasSuffix(path, "/batch-decrypt") {
+		return auth.PermissionRead
+	}
+	return auth.PermissionWrite
+}
+
+// metricsHumaMiddleware records Prometheus metrics for each huma request using
+// the operation path as the route label for clean, low-cardinality metrics.
+func metricsHumaMiddleware(ctx huma.Context, next func(huma.Context)) {
+	start := time.Now()
+	next(ctx)
+	elapsed := time.Since(start)
+
+	route := ctx.Operation().Path
+	status := ctx.Status()
+	if status == 0 {
+		status = 200
+	}
+
+	httpRequestsTotal.WithLabelValues(ctx.Method(), route, strconv.Itoa(status)).Inc()
+	httpRequestDuration.WithLabelValues(ctx.Method(), route).Observe(elapsed.Seconds())
+}
+
+// requestLogger logs each HTTP request with method, path, status, and latency.
+func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: 200}
@@ -236,6 +420,35 @@ func slogRequestLogger(next http.Handler) http.Handler {
 			"status", sw.status,
 			"latency", time.Since(start),
 		)
+	})
+}
+
+// realIP extracts the real client IP from X-Real-Ip or X-Forwarded-For headers.
+func realIP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rip := r.Header.Get("X-Real-Ip"); rip != "" {
+			r.RemoteAddr = rip
+		} else if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i > 0 {
+				r.RemoteAddr = strings.TrimSpace(xff[:i])
+			} else {
+				r.RemoteAddr = xff
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// recoverer recovers from panics and returns a 500 Internal Server Error.
+func recoverer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rvr := recover(); rvr != nil {
+				slog.Error("panic recovered", "error", rvr, "method", r.Method, "path", r.URL.Path) //nolint:gosec // structured logger, not format string
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
 	})
 }
 

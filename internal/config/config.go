@@ -36,6 +36,31 @@ type Config struct {
 
 	// Backup.
 	BackupDir string // directory for VACUUM INTO backups (empty = disabled)
+
+	// Secrets provider: "local" (default) or "gcpkms".
+	SecretsProvider string
+	// GCP KMS key resource name (required when SecretsProvider == "gcpkms").
+	KMSKeyResourceName string
+
+	// Auth mode: "single-tenant" (default), "google", or "jwt".
+	AuthMode string
+	// Google auth settings (required when AuthMode == "google").
+	GoogleClientID         string        // OAuth2 client ID for JWT audience verification
+	GoogleSAKeyFile        string        // Path to service account JSON key for Admin SDK
+	GoogleAdminEmail       string        // Workspace super-admin email for impersonation
+	GoogleAllowedDomains   string        // Comma-separated allowed hosted domains
+	GoogleTransitiveGroups bool          // Resolve nested group memberships
+	TokenTTL               time.Duration // Backend-issued token lifetime
+	GroupsCacheTTL         time.Duration // Group membership cache TTL
+	// JWT auth settings (required when AuthMode == "jwt").
+	JWTSigningKey    string // HMAC secret string or path to PEM public key file
+	JWTIssuer        string // Expected JWT issuer (optional)
+	JWTAudience      string // Expected JWT audience (optional)
+	JWTGroupsClaim   string // JWT claim name for groups (default: "groups")
+	JWTUsernameClaim string // JWT claim for username (default: "sub")
+
+	// RBAC config file path (empty = no RBAC enforcement, all users are admin).
+	RBACConfigPath string
 }
 
 func Parse() *Config {
@@ -63,6 +88,27 @@ func Parse() *Config {
 
 	// Backup flags.
 	flag.StringVar(&c.BackupDir, "backup-dir", "", "directory for database backups (empty = disabled)")
+
+	// Secrets provider flags.
+	flag.StringVar(&c.SecretsProvider, "secrets-provider", "local", "secrets provider: local or gcpkms")
+	flag.StringVar(&c.KMSKeyResourceName, "kms-key", "", "GCP KMS key resource name (required for gcpkms provider)")
+
+	// Auth flags.
+	flag.StringVar(&c.AuthMode, "auth-mode", "single-tenant", "authentication mode: single-tenant, google, or jwt")
+	flag.StringVar(&c.GoogleClientID, "google-client-id", "", "Google OAuth2 client ID for JWT verification")
+	flag.StringVar(&c.GoogleSAKeyFile, "google-sa-key", "", "path to service account JSON key for Admin SDK")
+	flag.StringVar(&c.GoogleAdminEmail, "google-admin-email", "", "Workspace super-admin email for impersonation")
+	flag.StringVar(&c.GoogleAllowedDomains, "google-allowed-domains", "", "comma-separated allowed hosted domains")
+	flag.BoolVar(&c.GoogleTransitiveGroups, "google-transitive-groups", false, "resolve nested group memberships")
+	flag.DurationVar(&c.TokenTTL, "token-ttl", 24*time.Hour, "backend-issued token lifetime")
+	flag.DurationVar(&c.GroupsCacheTTL, "groups-cache-ttl", 5*time.Minute, "group membership cache TTL")
+	// JWT auth flags.
+	flag.StringVar(&c.JWTSigningKey, "jwt-signing-key", "", "HMAC secret or path to PEM public key for JWT verification")
+	flag.StringVar(&c.JWTIssuer, "jwt-issuer", "", "expected JWT issuer claim (optional)")
+	flag.StringVar(&c.JWTAudience, "jwt-audience", "", "expected JWT audience claim (optional)")
+	flag.StringVar(&c.JWTGroupsClaim, "jwt-groups-claim", "groups", "JWT claim name for group memberships")
+	flag.StringVar(&c.JWTUsernameClaim, "jwt-username-claim", "sub", "JWT claim for username (sub or email)")
+	flag.StringVar(&c.RBACConfigPath, "rbac-config", "", "path to rbac.yaml (empty = all users are admin)")
 
 	flag.Parse()
 
@@ -125,8 +171,60 @@ func Parse() *Config {
 	if v := os.Getenv("PULUMI_BACKEND_BACKUP_DIR"); v != "" {
 		c.BackupDir = v
 	}
+	if v := os.Getenv("PULUMI_BACKEND_SECRETS_PROVIDER"); v != "" {
+		c.SecretsProvider = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_KMS_KEY"); v != "" {
+		c.KMSKeyResourceName = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_AUTH_MODE"); v != "" {
+		c.AuthMode = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_CLIENT_ID"); v != "" {
+		c.GoogleClientID = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_SA_KEY"); v != "" {
+		c.GoogleSAKeyFile = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_ADMIN_EMAIL"); v != "" {
+		c.GoogleAdminEmail = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_ALLOWED_DOMAINS"); v != "" {
+		c.GoogleAllowedDomains = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_TRANSITIVE_GROUPS"); v == "true" {
+		c.GoogleTransitiveGroups = true
+	}
+	if v := os.Getenv("PULUMI_BACKEND_TOKEN_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.TokenTTL = d
+		}
+	}
+	if v := os.Getenv("PULUMI_BACKEND_GROUPS_CACHE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.GroupsCacheTTL = d
+		}
+	}
+	if v := os.Getenv("PULUMI_BACKEND_JWT_SIGNING_KEY"); v != "" {
+		c.JWTSigningKey = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_JWT_ISSUER"); v != "" {
+		c.JWTIssuer = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_JWT_AUDIENCE"); v != "" {
+		c.JWTAudience = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_JWT_GROUPS_CLAIM"); v != "" {
+		c.JWTGroupsClaim = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_JWT_USERNAME_CLAIM"); v != "" {
+		c.JWTUsernameClaim = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_RBAC_CONFIG"); v != "" {
+		c.RBACConfigPath = v
+	}
 
-	if c.MasterKey == "" {
+	if c.MasterKey == "" && c.SecretsProvider == "local" {
 		key := make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to generate master key: %v\n", err)

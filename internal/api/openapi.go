@@ -1,10 +1,11 @@
 package api
 
 import (
+	"net/http"
+
 	"github.com/danielgtaylor/huma/v2"
-	"github.com/danielgtaylor/huma/v2/adapters/humachi"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/go-chi/chi/v5"
 )
 
 // BuildOpenAPISpec constructs the OpenAPI spec by creating a temporary huma API,
@@ -18,9 +19,9 @@ func BuildOpenAPISpec() *openapi3.T {
 		historyPageSize:  10,
 	}
 
-	// Create a temporary chi router and huma API.
-	r := chi.NewRouter()
-	api := humachi.New(r, newHumaConfig())
+	// Create a temporary mux and huma API.
+	mux := http.NewServeMux()
+	api := humago.New(mux, newHumaConfig())
 
 	// Register all operations (this populates the OpenAPI spec).
 	s.registerCapabilities(api)

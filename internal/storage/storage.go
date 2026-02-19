@@ -126,6 +126,7 @@ type Store interface {
 	// Journal entries
 	SaveJournalEntries(ctx context.Context, entries []JournalEntry) error
 	GetJournalEntries(ctx context.Context, updateID string) ([]JournalEntry, error)
+	GetMaxJournalSequence(ctx context.Context, updateID string) (int64, error)
 
 	// Engine events
 	SaveEngineEvents(ctx context.Context, events []EngineEvent) error
@@ -140,6 +141,8 @@ type Store interface {
 	CreateToken(ctx context.Context, t *Token) error
 	GetToken(ctx context.Context, tokenHash string) (*Token, error)
 	TouchToken(ctx context.Context, tokenHash string) error
+	DeleteToken(ctx context.Context, tokenHash string) error
+	ListTokensByUser(ctx context.Context, userName string) ([]Token, error)
 
 	// Secrets keys
 	SaveSecretsKey(ctx context.Context, org, project, stack string, encryptedKey []byte) error

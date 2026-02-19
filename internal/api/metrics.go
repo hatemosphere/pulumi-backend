@@ -2,10 +2,7 @@ package api
 
 import (
 	"net/http"
-	"strconv"
-	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -46,22 +43,4 @@ func RegisterActiveUpdatesGauge(countFn func() float64) {
 // MetricsHandler returns the Prometheus metrics HTTP handler.
 func MetricsHandler() http.Handler {
 	return promhttp.Handler()
-}
-
-// metricsMiddleware records request count and duration per route pattern.
-func metricsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		sw := &statusWriter{ResponseWriter: w, status: 200}
-		next.ServeHTTP(sw, r)
-
-		// Use the chi route pattern for low-cardinality labels.
-		route := chi.RouteContext(r.Context()).RoutePattern()
-		if route == "" {
-			route = "unmatched"
-		}
-
-		httpRequestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(sw.status)).Inc()
-		httpRequestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
-	})
 }
