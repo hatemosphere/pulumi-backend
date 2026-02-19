@@ -77,11 +77,25 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 
 ## Tests
 
-```
-go test ./...
+```bash
+go test ./...                                             # full suite (CLI tests need pulumi in PATH)
+go test ./tests/ -run 'Test[^C][^L][^I]'                  # HTTP API tests only (no pulumi needed)
+go test ./tests/ -run TestCLI                              # CLI integration tests
+go test -v ./tests/ -run TestAPISpecSchemaCompliance       # OpenAPI spec compliance
 ```
 
-The test suite includes CLI integration tests (require `pulumi` binary), HTTP API contract tests, OpenAPI spec coverage validation, and a benchmark comparing against GCS. To run the spec coverage report: `curl -o pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json && go test -v -run TestAPISpecCoverage ./tests/`. To run the GCS benchmark: `RUN_GCS_BENCHMARK=1 go test -v -run TestBenchmarkBackendComparison -timeout 600s ./tests/` (requires `GOOGLE_CLOUD_PROJECT` and GCP Application Default Credentials).
+**Spec coverage report** (compares against upstream Pulumi Cloud spec):
+
+```bash
+curl -o pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json
+go test -v -run TestAPISpecCoverage ./tests/
+```
+
+**GCS benchmark** (requires `GOOGLE_CLOUD_PROJECT` and GCP Application Default Credentials):
+
+```bash
+RUN_GCS_BENCHMARK=1 go test -v -run TestBenchmarkBackendComparison -timeout 600s ./tests/
+```
 
 ## Performance optimizations status
 
