@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/gzip"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 const defaultMaxStateVersions = 50
@@ -28,8 +28,7 @@ type SQLiteStore struct {
 }
 
 func NewSQLiteStore(path string, cfgs ...SQLiteStoreConfig) (*SQLiteStore, error) {
-	// sqlite3 driver usage (standard)
-	db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous(normal)&_pragma=foreign_keys(on)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -64,7 +63,7 @@ func (s *SQLiteStore) Close() error {
 }
 
 func (s *SQLiteStore) Backup(ctx context.Context, destPath string) error {
-	_, err := s.db.ExecContext(ctx, fmt.Sprintf("VACUUM INTO '%s'", destPath))
+	_, err := s.db.ExecContext(ctx, "VACUUM INTO ?", destPath)
 	return err
 }
 
@@ -600,31 +599,11 @@ func (s *SQLiteStore) CreateUpdate(ctx context.Context, u *Update) error {
 }
 
 func (s *SQLiteStore) StartUpdate(ctx context.Context, id string, version int, token string, expires time.Time, journalVer int) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
-
-	if _, err := tx.ExecContext(ctx, `UPDATE updates SET status='in-progress', version=?, token=?, token_expires_at=?, journal_version=?, started_at=? WHERE id=?`,
-		version, token, expires.Unix(), journalVer, time.Now().Unix(), id); err != nil {
-		return err
-	}
-
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tokens (token_hash, user_name, description, created_at, expires_at) VALUES (?, 'system', 'lease', ?, ?)`,
-		token, time.Now().Unix(), expires.Unix()); err != nil {
-		// Ignore token creation error if strict FK? No, tokens table is for API tokens mostly.
-		// NOTE: The legacy implementation might have used a separate 'tokens' table or 'update_leases'.
-		// The proposed schema above has 'tokens' table which looks like API tokens.
-		// The previous 'tokens' table (in my "clean" assumption) had 'update_id'.
-		// I will assume the Update table 'token' column is what matters for locking.
-		// I will comment out the token table insert to avoid confusion if schema mismatch.
-		// Or better: The schema I define in const schema has `token` in `updates` table.
-		// It also has `tokens` table with `token_hash`.
-		// I'll stick to updating `updates` table.
-	}
-
-	return tx.Commit()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE updates SET status='in-progress', version=?, token=?, token_expires_at=?, journal_version=?, started_at=?
+		 WHERE id=?`,
+		version, token, expires.Unix(), journalVer, time.Now().Unix(), id)
+	return err
 }
 
 func (s *SQLiteStore) GetUpdate(ctx context.Context, id string) (*Update, error) {
@@ -696,18 +675,11 @@ func (s *SQLiteStore) CompleteUpdate(ctx context.Context, id string, status stri
 	return err
 }
 
-func (s *SQLiteStore) RenewLease(ctx context.Context, id string, token string, expires time.Time) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE updates SET token_expires_at=? WHERE id=? AND token=?`,
-		expires.Unix(), id, token)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("lease not found or token mismatch")
-	}
-	return nil
+func (s *SQLiteStore) RenewLease(ctx context.Context, id string, newToken string, newExpiry time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE updates SET token=?, token_expires_at=? WHERE id=?`,
+		newToken, newExpiry.Unix(), id)
+	return err
 }
 
 func (s *SQLiteStore) CancelUpdate(ctx context.Context, id string) error {
@@ -766,31 +738,230 @@ func (s *SQLiteStore) GetMaxJournalSequence(ctx context.Context, id string) (int
 	return 0, nil
 }
 
-// --- Unimplemented / Todo ---
+// --- Engine Events ---
 
-func (s *SQLiteStore) SaveEngineEvents(ctx context.Context, events []EngineEvent) error { return nil }
+func (s *SQLiteStore) SaveEngineEvents(ctx context.Context, events []EngineEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+
+	stmt, err := tx.PrepareContext(ctx,
+		`INSERT OR REPLACE INTO engine_events (update_id, sequence, event) VALUES (?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, e := range events {
+		if _, err := stmt.ExecContext(ctx, e.UpdateID, e.Sequence, e.Event); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *SQLiteStore) GetEngineEvents(ctx context.Context, updateID string, offset, count int) ([]EngineEvent, error) {
-	return nil, nil
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT update_id, sequence, event FROM engine_events WHERE update_id=? ORDER BY sequence LIMIT ? OFFSET ?`,
+		updateID, count, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []EngineEvent
+	for rows.Next() {
+		var e EngineEvent
+		if err := rows.Scan(&e.UpdateID, &e.Sequence, &e.Event); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	return events, nil
 }
-func (s *SQLiteStore) SaveUpdateHistory(ctx context.Context, h *UpdateHistory) error { return nil }
+
+// --- Update History ---
+
+func (s *SQLiteStore) SaveUpdateHistory(ctx context.Context, h *UpdateHistory) error {
+	var endTime *int64
+	if h.EndTime != nil {
+		t := h.EndTime.Unix()
+		endTime = &t
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO update_history (org_name, project_name, stack_name, version, update_id, kind, status, message, environment, config, start_time, end_time, resource_changes)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		h.OrgName, h.ProjectName, h.StackName, h.Version, h.UpdateID, h.Kind, h.Status,
+		h.Message, h.Environment, h.Config, h.StartTime.Unix(), endTime, h.ResourceChanges)
+	return err
+}
+
 func (s *SQLiteStore) GetUpdateHistory(ctx context.Context, org, project, stack string, pageSize, page int) ([]UpdateHistory, error) {
-	return nil, nil
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	offset := page * pageSize
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT org_name, project_name, stack_name, version, update_id, kind, status, message, environment, config, start_time, end_time, resource_changes
+		 FROM update_history WHERE org_name=? AND project_name=? AND stack_name=?
+		 ORDER BY version DESC LIMIT ? OFFSET ?`,
+		org, project, stack, pageSize, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var history []UpdateHistory
+	for rows.Next() {
+		var h UpdateHistory
+		var startTime int64
+		var endTime *int64
+		if err := rows.Scan(&h.OrgName, &h.ProjectName, &h.StackName, &h.Version, &h.UpdateID,
+			&h.Kind, &h.Status, &h.Message, &h.Environment, &h.Config, &startTime, &endTime, &h.ResourceChanges); err != nil {
+			return nil, err
+		}
+		h.StartTime = time.Unix(startTime, 0)
+		if endTime != nil {
+			t := time.Unix(*endTime, 0)
+			h.EndTime = &t
+		}
+		history = append(history, h)
+	}
+	return history, nil
 }
+
 func (s *SQLiteStore) GetUpdateHistoryByVersion(ctx context.Context, org, project, stack string, version int) (*UpdateHistory, error) {
-	return nil, nil
+	row := s.db.QueryRowContext(ctx,
+		`SELECT org_name, project_name, stack_name, version, update_id, kind, status, message, environment, config, start_time, end_time, resource_changes
+		 FROM update_history WHERE org_name=? AND project_name=? AND stack_name=? AND version=?`,
+		org, project, stack, version)
+
+	var h UpdateHistory
+	var startTime int64
+	var endTime *int64
+	err := row.Scan(&h.OrgName, &h.ProjectName, &h.StackName, &h.Version, &h.UpdateID,
+		&h.Kind, &h.Status, &h.Message, &h.Environment, &h.Config, &startTime, &endTime, &h.ResourceChanges)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	h.StartTime = time.Unix(startTime, 0)
+	if endTime != nil {
+		t := time.Unix(*endTime, 0)
+		h.EndTime = &t
+	}
+	return &h, nil
 }
-func (s *SQLiteStore) CreateToken(ctx context.Context, t *Token) error { return nil }
+
+// --- Tokens ---
+
+func (s *SQLiteStore) CreateToken(ctx context.Context, t *Token) error {
+	var expiresAt *int64
+	if t.ExpiresAt != nil {
+		e := t.ExpiresAt.Unix()
+		expiresAt = &e
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO tokens (token_hash, user_name, description, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
+		t.TokenHash, t.UserName, t.Description, time.Now().Unix(), expiresAt)
+	return err
+}
+
 func (s *SQLiteStore) GetToken(ctx context.Context, tokenHash string) (*Token, error) {
-	return nil, nil
+	row := s.db.QueryRowContext(ctx,
+		`SELECT token_hash, user_name, description, created_at, last_used_at, expires_at FROM tokens WHERE token_hash=?`,
+		tokenHash)
+
+	t := &Token{}
+	var createdAt int64
+	var lastUsedAt, expiresAt *int64
+	err := row.Scan(&t.TokenHash, &t.UserName, &t.Description, &createdAt, &lastUsedAt, &expiresAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	t.CreatedAt = time.Unix(createdAt, 0)
+	if lastUsedAt != nil {
+		lu := time.Unix(*lastUsedAt, 0)
+		t.LastUsedAt = &lu
+	}
+	if expiresAt != nil {
+		ea := time.Unix(*expiresAt, 0)
+		t.ExpiresAt = &ea
+	}
+	return t, nil
 }
-func (s *SQLiteStore) TouchToken(ctx context.Context, tokenHash string) error  { return nil }
-func (s *SQLiteStore) DeleteToken(ctx context.Context, tokenHash string) error { return nil }
+
+func (s *SQLiteStore) TouchToken(ctx context.Context, tokenHash string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tokens SET last_used_at=? WHERE token_hash=?`,
+		time.Now().Unix(), tokenHash)
+	return err
+}
+
+func (s *SQLiteStore) DeleteToken(ctx context.Context, tokenHash string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM tokens WHERE token_hash=?`, tokenHash)
+	return err
+}
+
 func (s *SQLiteStore) ListTokensByUser(ctx context.Context, userName string) ([]Token, error) {
-	return nil, nil
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT token_hash, user_name, description, created_at, last_used_at, expires_at
+		 FROM tokens WHERE user_name=? ORDER BY created_at DESC`, userName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tokens []Token
+	for rows.Next() {
+		var t Token
+		var createdAt int64
+		var lastUsedAt, expiresAt *int64
+		if err := rows.Scan(&t.TokenHash, &t.UserName, &t.Description, &createdAt, &lastUsedAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		t.CreatedAt = time.Unix(createdAt, 0)
+		if lastUsedAt != nil {
+			lu := time.Unix(*lastUsedAt, 0)
+			t.LastUsedAt = &lu
+		}
+		if expiresAt != nil {
+			ea := time.Unix(*expiresAt, 0)
+			t.ExpiresAt = &ea
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens, rows.Err()
 }
+
+// --- Secrets Keys ---
+
 func (s *SQLiteStore) SaveSecretsKey(ctx context.Context, org, project, stack string, encryptedKey []byte) error {
-	return nil
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR REPLACE INTO secrets_keys (org_name, project_name, stack_name, encryption_key) VALUES (?, ?, ?, ?)`,
+		org, project, stack, encryptedKey)
+	return err
 }
+
 func (s *SQLiteStore) GetSecretsKey(ctx context.Context, org, project, stack string) ([]byte, error) {
-	return nil, nil
+	var key []byte
+	err := s.db.QueryRowContext(ctx,
+		`SELECT encryption_key FROM secrets_keys WHERE org_name=? AND project_name=? AND stack_name=?`,
+		org, project, stack).Scan(&key)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return key, err
 }
