@@ -43,6 +43,7 @@ jobs:
           report_paths: unit-results.xml
           check_name: Unit Test Results
           include_passed: true
+          detailed_summary: true
           job_summary: true
 
       - name: Upload test results
@@ -77,6 +78,7 @@ jobs:
           report_paths: api-results.xml
           check_name: API Test Results
           include_passed: true
+          detailed_summary: true
           job_summary: true
 
       - name: Upload test results
@@ -115,6 +117,7 @@ jobs:
           report_paths: cli-results.xml
           check_name: CLI Test Results
           include_passed: true
+          detailed_summary: true
           job_summary: true
 
       - name: Upload test results
