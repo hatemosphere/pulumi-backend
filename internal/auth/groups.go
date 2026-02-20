@@ -19,23 +19,38 @@ type GroupsResolver struct {
 
 // NewGroupsResolver creates a resolver that queries the Admin SDK for group membership.
 //
-// The service account must have domain-wide delegation with the
-// AdminDirectoryGroupReadonlyScope scope, and adminEmail must be a
-// Workspace super-admin account for domain-wide delegation (Subject).
+// If saKeyFile is provided, it is read and used for domain-wide delegation via
+// JWT credentials with Subject set to adminEmail. If saKeyFile is empty,
+// Application Default Credentials (ADC) are used instead — this supports
+// Workload Identity in GKE, GOOGLE_APPLICATION_CREDENTIALS env var, and
+// gcloud auth application-default login. The underlying service account must
+// have domain-wide delegation with the AdminDirectoryGroupReadonlyScope scope.
 func NewGroupsResolver(ctx context.Context, saKeyFile, adminEmail string, transitive bool) (*GroupsResolver, error) {
-	jsonKey, err := os.ReadFile(saKeyFile)
-	if err != nil {
-		return nil, fmt.Errorf("read service account key: %w", err)
+	var opts []option.ClientOption
+
+	if saKeyFile != "" {
+		jsonKey, err := os.ReadFile(saKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("read service account key: %w", err)
+		}
+		jwtConfig, err := google.JWTConfigFromJSON(jsonKey, admin.AdminDirectoryGroupReadonlyScope)
+		if err != nil {
+			return nil, fmt.Errorf("parse service account key: %w", err)
+		}
+		jwtConfig.Subject = adminEmail
+		opts = append(opts, option.WithHTTPClient(jwtConfig.Client(ctx)))
+	} else {
+		creds, err := google.FindDefaultCredentialsWithParams(ctx, google.CredentialsParams{
+			Scopes:  []string{admin.AdminDirectoryGroupReadonlyScope},
+			Subject: adminEmail,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("find default credentials: %w", err)
+		}
+		opts = append(opts, option.WithCredentials(creds))
 	}
 
-	// Domain-wide delegation: JWT credentials with Subject set to the admin user.
-	jwtConfig, err := google.JWTConfigFromJSON(jsonKey, admin.AdminDirectoryGroupReadonlyScope)
-	if err != nil {
-		return nil, fmt.Errorf("parse service account key: %w", err)
-	}
-	jwtConfig.Subject = adminEmail
-
-	srv, err := admin.NewService(ctx, option.WithHTTPClient(jwtConfig.Client(ctx)))
+	srv, err := admin.NewService(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create admin service: %w", err)
 	}

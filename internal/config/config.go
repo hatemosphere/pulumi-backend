@@ -46,7 +46,7 @@ type Config struct {
 	AuthMode string
 	// Google auth settings (required when AuthMode == "google").
 	GoogleClientID         string        // OAuth2 client ID for JWT audience verification
-	GoogleSAKeyFile        string        // Path to service account JSON key for Admin SDK
+	GoogleSAKeyFile        string        // Optional path to SA JSON key for Admin SDK; uses ADC if empty
 	GoogleAdminEmail       string        // Workspace super-admin email for impersonation
 	GoogleAllowedDomains   string        // Comma-separated allowed hosted domains
 	GoogleTransitiveGroups bool          // Resolve nested group memberships
@@ -96,7 +96,7 @@ func Parse() *Config {
 	// Auth flags.
 	flag.StringVar(&c.AuthMode, "auth-mode", "single-tenant", "authentication mode: single-tenant, google, or jwt")
 	flag.StringVar(&c.GoogleClientID, "google-client-id", "", "Google OAuth2 client ID for JWT verification")
-	flag.StringVar(&c.GoogleSAKeyFile, "google-sa-key", "", "path to service account JSON key for Admin SDK")
+	flag.StringVar(&c.GoogleSAKeyFile, "google-sa-key", "", "optional path to SA JSON key for Admin SDK (uses ADC if empty)")
 	flag.StringVar(&c.GoogleAdminEmail, "google-admin-email", "", "Workspace super-admin email for impersonation")
 	flag.StringVar(&c.GoogleAllowedDomains, "google-allowed-domains", "", "comma-separated allowed hosted domains")
 	flag.BoolVar(&c.GoogleTransitiveGroups, "google-transitive-groups", false, "resolve nested group memberships")
