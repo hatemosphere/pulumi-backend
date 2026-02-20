@@ -1,0 +1,63 @@
+name: test-project
+runtime: yaml
+description: Mock project for testing pulumi-backend (random provider, no cloud creds)
+
+config:
+  petCount:
+    type: integer
+    default: 2
+  prefix:
+    type: string
+    default: "backend"
+  stringLength:
+    type: integer
+    default: 16
+
+resources:
+  # A random pet name — easy to see diffs when you change prefix/petCount
+  pet:
+    type: random:RandomPet
+    properties:
+      length: ${petCount}
+      prefix: ${prefix}
+      separator: "-"
+
+  # A random string — shows special chars handling, secrets
+  secret:
+    type: random:RandomString
+    properties:
+      length: ${stringLength}
+      special: true
+      overrideSpecial: "!@#$"
+
+  # A random UUID — immutable, shows replace-on-change behavior
+  uid:
+    type: random:RandomUuid
+
+  # A random ID — hex output, useful for testing export/import
+  rid:
+    type: random:RandomId
+    properties:
+      byteLength: 8
+
+  # A random password — marked sensitive, tests secrets encryption
+  password:
+    type: random:RandomPassword
+    properties:
+      length: 24
+      special: true
+
+  # A random integer — easy to change range and see diffs
+  priority:
+    type: random:RandomInteger
+    properties:
+      min: 1
+      max: 100
+
+outputs:
+  petName: ${pet.id}
+  secretValue: ${secret.result}
+  uuid: ${uid.result}
+  hexId: ${rid.hex}
+  password: ${password.result}
+  priority: ${priority.result}
