@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -445,7 +446,7 @@ func maybeDecompress(data []byte) ([]byte, error) {
 			return nil, err
 		}
 		if int64(len(decompressed)) > limit {
-			return nil, fmt.Errorf("decompressed deployment exceeds maximum size of 512MB")
+			return nil, errors.New("decompressed deployment exceeds maximum size of 512MB")
 		}
 		return decompressed, nil
 	}

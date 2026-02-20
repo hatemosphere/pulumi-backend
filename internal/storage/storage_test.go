@@ -181,7 +181,7 @@ func TestUpdateLifecycle(t *testing.T) {
 	defer store.Close()
 
 	ctx := context.Background()
-	store.CreateStack(ctx, &Stack{OrgName: "org", ProjectName: "proj", StackName: "stack"})
+	store.CreateStack(ctx, &Stack{OrgName: "org", ProjectName: "proj", StackName: "stack"}) //nolint:errcheck // test setup
 
 	u := &Update{
 		ID:          "upd1",
@@ -302,8 +302,8 @@ func TestTokenManagement(t *testing.T) {
 	}
 
 	// Test Delete by user
-	store.CreateToken(ctx, &Token{TokenHash: "hash2", UserName: "user2"})
-	store.CreateToken(ctx, &Token{TokenHash: "hash3", UserName: "user2"})
+	store.CreateToken(ctx, &Token{TokenHash: "hash2", UserName: "user2"}) //nolint:errcheck // test setup
+	store.CreateToken(ctx, &Token{TokenHash: "hash3", UserName: "user2"}) //nolint:errcheck // test setup
 	deletedCount, err := store.DeleteTokensByUser(ctx, "user2")
 	if err != nil || deletedCount != 2 {
 		t.Fatalf("expected to delete 2 tokens, got %d", deletedCount)
@@ -320,8 +320,8 @@ func TestJournalAndEngineEvents(t *testing.T) {
 
 	ctx := context.Background()
 
-	store.CreateStack(ctx, &Stack{OrgName: "org", ProjectName: "proj", StackName: "stack"})
-	store.CreateUpdate(ctx, &Update{ID: "upd1", OrgName: "org", ProjectName: "proj", StackName: "stack", Kind: "update"})
+	store.CreateStack(ctx, &Stack{OrgName: "org", ProjectName: "proj", StackName: "stack"})                               //nolint:errcheck // test setup
+	store.CreateUpdate(ctx, &Update{ID: "upd1", OrgName: "org", ProjectName: "proj", StackName: "stack", Kind: "update"}) //nolint:errcheck // test setup //nolint:errcheck // test setup
 
 	err = store.SaveJournalEntries(ctx, []JournalEntry{
 		{UpdateID: "upd1", SequenceID: 1, Entry: []byte("entry1")},

@@ -137,7 +137,7 @@ func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
 		slog.Error("ID token exchange failed", "error", err)
 
 		// Audit Log: Login Failed
-		slog.Warn("Audit Log: Login Failed",
+		slog.Warn("Audit Log: Login Failed", //nolint:gosec // structured logger safely escapes taint
 			slog.Group("audit",
 				slog.String("actor", "anonymous"),
 				slog.String("action", "login_attempt"),
@@ -172,7 +172,7 @@ func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Audit Log: Login Success
-	slog.Info("Audit Log: Login Success",
+	slog.Info("Audit Log: Login Success", //nolint:gosec // structured logger safely escapes taint
 		slog.Group("audit",
 			slog.String("actor", result.UserName),
 			slog.String("action", "login_success"),
