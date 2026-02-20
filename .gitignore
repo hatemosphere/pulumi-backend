@@ -1,5 +1,5 @@
 # Binary
-pulumi-backend
+/pulumi-backend
 
 # SQLite database files
 *.db
