@@ -24,6 +24,12 @@ pulumi-spec.json
 *.swo
 *~
 
+# GCP credentials / OAuth client secrets
+client_secret_*.json
+*-service-account*.json
+*-credentials.json
+application_default_credentials.json
+
 # OS
 .DS_Store
 Thumbs.db

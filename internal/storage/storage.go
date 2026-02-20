@@ -81,12 +81,13 @@ type UpdateHistory struct {
 
 // Token represents an API access token.
 type Token struct {
-	TokenHash   string
-	UserName    string
-	Description string
-	CreatedAt   time.Time
-	LastUsedAt  *time.Time
-	ExpiresAt   *time.Time
+	TokenHash    string
+	UserName     string
+	Description  string
+	RefreshToken string //nolint:gosec // field name, not a credential
+	CreatedAt    time.Time
+	LastUsedAt   *time.Time
+	ExpiresAt    *time.Time
 }
 
 // Store is the storage interface for the backend.
@@ -142,6 +143,7 @@ type Store interface {
 	GetToken(ctx context.Context, tokenHash string) (*Token, error)
 	TouchToken(ctx context.Context, tokenHash string) error
 	DeleteToken(ctx context.Context, tokenHash string) error
+	DeleteTokensByUser(ctx context.Context, userName string) (int64, error)
 	ListTokensByUser(ctx context.Context, userName string) ([]Token, error)
 
 	// Secrets keys

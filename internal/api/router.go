@@ -22,18 +22,19 @@ import (
 
 // Server is the HTTP API server.
 type Server struct {
-	engine           *engine.Manager
-	defaultOrg       string
-	defaultUser      string
-	deltaCutoffBytes int
-	historyPageSize  int
-	humaAPI          huma.API
-	authMode         string                    // "single-tenant" (default), "google", or "jwt"
-	tokenStore       storage.Store             // required in google auth mode
-	googleAuth       *auth.GoogleAuthenticator // required in google auth mode
-	groupsCache      *auth.GroupsCache         // optional: resolves groups in google auth mode
-	jwtAuth          *auth.JWTAuthenticator    // required in jwt auth mode
-	rbac             *auth.RBACResolver        // nil = no RBAC enforcement
+	engine             *engine.Manager
+	defaultOrg         string
+	defaultUser        string
+	deltaCutoffBytes   int
+	historyPageSize    int
+	humaAPI            huma.API
+	authMode           string                    // "single-tenant" (default), "google", or "jwt"
+	tokenStore         storage.Store             // required in google auth mode
+	googleAuth         *auth.GoogleAuthenticator // required in google auth mode
+	groupsCache        *auth.GroupsCache         // optional: resolves groups in google auth mode
+	jwtAuth            *auth.JWTAuthenticator    // required in jwt auth mode
+	rbac               *auth.RBACResolver        // nil = no RBAC enforcement
+	googleClientSecret string                    // OAuth2 client secret for browser login
 }
 
 // NewServer creates a new API server.
@@ -94,6 +95,11 @@ func WithRBAC(resolver *auth.RBACResolver) ServerOption {
 	return func(s *Server) { s.rbac = resolver }
 }
 
+// WithGoogleClientSecret sets the OAuth2 client secret for the browser login flow.
+func WithGoogleClientSecret(secret string) ServerOption {
+	return func(s *Server) { s.googleClientSecret = secret }
+}
+
 // humaJSONFormat uses stdlib encoding/json for huma request/response serialization.
 var humaJSONFormat = huma.Format{
 	Marshal: func(w io.Writer, v any) error {
@@ -148,6 +154,11 @@ func (s *Server) Router() http.Handler {
 	publicAPI := humago.New(mux, newHumaConfig())
 	publicAPI.UseMiddleware(metricsHumaMiddleware)
 	s.registerPublicRoutes(publicAPI)
+
+	// Browser login page (raw mux, serves HTML not JSON).
+	if s.googleAuth != nil && s.googleClientSecret != "" {
+		s.registerLoginPage(mux)
+	}
 
 	// Auth-protected API routes.
 	api := humago.New(mux, newHumaConfig())
@@ -341,12 +352,39 @@ func (s *Server) authGoogleHuma(api huma.API, ctx huma.Context, next func(huma.C
 
 	next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
 
-	// Async touch to update last_used_at without blocking the response.
+	// Async: touch last_used_at + re-validate against Google if refresh token is stored.
 	go func() {
 		if err := s.tokenStore.TouchToken(context.Background(), tokenHash); err != nil {
 			slog.Warn("failed to touch token", "error", err)
 		}
+
+		// Re-validate against Google when the token is past half its TTL.
+		// This detects deactivated users without adding latency to every request.
+		if tok.RefreshToken != "" && s.googleClientSecret != "" && s.googleAuth != nil && s.shouldRevalidate(tok) {
+			if err := s.googleAuth.Revalidate(context.Background(), tok.RefreshToken, s.googleClientSecret); err != nil {
+				slog.Warn("google re-validation failed, revoking token",
+					"user", tok.UserName,
+					"error", err,
+				)
+				if delErr := s.tokenStore.DeleteToken(context.Background(), tokenHash); delErr != nil {
+					slog.Error("failed to delete revoked token", "error", delErr)
+				}
+			}
+		}
 	}()
+}
+
+// shouldRevalidate returns true if the token should be re-validated against Google.
+// Triggers when the token is past half its TTL (checked via CreatedAt and ExpiresAt).
+func (s *Server) shouldRevalidate(tok *storage.Token) bool {
+	if tok.ExpiresAt == nil {
+		return false // no expiry = no TTL-based revalidation
+	}
+
+	totalTTL := tok.ExpiresAt.Sub(tok.CreatedAt)
+	elapsed := time.Since(tok.CreatedAt)
+
+	return elapsed > totalTTL/2
 }
 
 // rbacMiddleware returns a huma middleware that enforces RBAC permissions based

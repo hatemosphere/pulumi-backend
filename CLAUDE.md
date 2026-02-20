@@ -29,7 +29,8 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | `internal/auth/rbac_config.go` | RBAC YAML config + Permission types |
 | `internal/auth/identity.go` | UserIdentity type + context helpers |
 | `internal/auth/groups_cache.go` | TTL + singleflight cache for group lookups |
-| `internal/auth/google.go` | Google OIDC authenticator + token exchange |
+| `internal/auth/google.go` | Google OIDC authenticator + IDTokenValidator/TokenRefresher interfaces + Revalidate |
+| `internal/api/login.go` | Browser + CLI login (GET /login, /login/callback, /cli-login), refresh token capture |
 | `internal/engine/manager.go` | Core logic |
 | `internal/engine/journal.go` | Journal replay algorithm |
 | `internal/engine/delta.go` | Byte-offset delta application |
@@ -42,15 +43,16 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 ## Reference code
 
 - `reference/pulumi/` — Upstream Pulumi source clone (for API shape reference)
+- `reference/dex/` — Dex OIDC connector reference (Google connector refresh token pattern)
 
 ## Build & test
 
 ```bash
 go build -o pulumi-backend ./cmd/pulumi-backend
 go test ./internal/...                                    # unit tests
-go test -timeout 120s ./tests/ -skip '^TestCLI'           # API + auth tests (no pulumi needed)
-go test -v -timeout 120s ./tests/ -run TestCLI            # CLI integration (needs pulumi in PATH)
-go test -v -run TestAPISpecSchemaCompliance ./tests/       # spec compliance
+go test -timeout 120s ./tests/ -count=1                   # API + auth tests (CLI/GCP tests auto-skip)
+go test -v -timeout 600s ./tests/ -count=1                # all tests including CLI (needs pulumi in PATH)
+go test -v -run TestAPISpecSchemaCompliance ./tests/      # spec compliance
 go test -bench . -benchmem ./internal/engine              # run engine benchmarks (not in CI)
 go test -timeout 600s ./tests/ -count=1                   # full suite
 golangci-lint run ./...                                   # lint
@@ -65,8 +67,12 @@ golangci-lint run ./...                                   # lint
 - **RawBody caution**: huma pools request body buffers. Any `RawBody []byte` stored beyond handler lifetime must be copied (`make + copy`).
 - **Middleware architecture**: HTTP-level (realIP, recoverer, requestLogger, gzipDecompressor) + huma-level (metricsHumaMiddleware, authHumaMiddleware, rbacMiddleware). Two huma API instances on the same mux: publicAPI (no auth) and api (auth + RBAC).
 - SQLite: pure Go via `modernc.org/sqlite`, WAL mode, `MaxOpenConns=1`
-- Auth: three modes — `single-tenant` (any token = admin), `google` (OIDC + backend tokens + groups), `jwt` (stateless, claims-based)
-- RBAC: group-based with stack-level policy overrides. Permission levels: `none < read < write < admin`.
+- Auth: three modes — `single-tenant` (any token = admin), `google` (OIDC + backend tokens + groups + browser login), `jwt` (stateless, claims-based)
+- Google auth testability: `IDTokenValidator` + `TokenRefresher` interfaces in google.go allow test injection of mocks
+- Browser login: `GET /login` (manual), `GET /cli-login` (automatic via `PULUMI_CONSOLE_DOMAIN`). Requires `-google-client-secret`. Routes registered on raw mux, not huma (serves HTML).
+- Google refresh token re-validation: browser/CLI login captures Google's refresh token, stored in `tokens` table. On each auth request past half TTL, async re-validation against Google detects deactivated users (Dex pattern).
+- Admin endpoints: `requireAdmin()` helper checks `IsAdmin` (single-tenant) OR RBAC admin permission (Google/JWT). Token management: `GET/DELETE /api/admin/tokens/{userName}`.
+- RBAC: group-based with stack-level policy overrides. Permission levels: `none < read < write < admin`. Admin RBAC role grants access to admin endpoints too.
 - Secrets: per-stack AES-256-GCM keys wrapped by master key (local) or GCP KMS
 - Deployments: gzip-compressed in DB, zero-copy gzip export when client accepts it
 - Leases: in-memory `sync.Map` + SQLite; lost on restart

@@ -30,6 +30,14 @@ func startBackend(t *testing.T) *testBackend {
 
 // --- CLI helpers ---
 
+// requireCLI skips the test if the pulumi CLI binary is not available.
+func requireCLI(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("pulumi"); err != nil {
+		t.Skip("pulumi CLI not in PATH, skipping CLI integration test")
+	}
+}
+
 // pulumi runs a pulumi CLI command against the test backend.
 func (tb *testBackend) pulumi(t *testing.T, dir string, args ...string) string {
 	t.Helper()

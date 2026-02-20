@@ -14,6 +14,7 @@ import (
 // ===== Login & User =====
 
 func TestLoginAndUserInfo(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -34,6 +35,7 @@ runtime: yaml
 // ===== Stack Lifecycle =====
 
 func TestStackLifecycle(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -74,6 +76,7 @@ runtime: yaml
 }
 
 func TestStackSelect(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -99,6 +102,7 @@ runtime: yaml
 }
 
 func TestListStacks(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -117,6 +121,7 @@ runtime: yaml
 }
 
 func TestDeleteEmptyStack(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -139,6 +144,7 @@ runtime: yaml
 }
 
 func TestDeleteNonEmptyStackRequiresForce(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -166,6 +172,7 @@ outputs:
 }
 
 func TestDuplicateStackCreationFails(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -184,6 +191,7 @@ runtime: yaml
 // ===== Stack Tags =====
 
 func TestStackTagsCRUD(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -216,6 +224,7 @@ runtime: yaml
 }
 
 func TestStackTagsSetByUpdate(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: my-project
@@ -246,6 +255,7 @@ outputs:
 // ===== Stack Rename =====
 
 func TestRenameStack(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -279,6 +289,7 @@ outputs:
 }
 
 func TestStackRenamePreservesHistory(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -335,6 +346,7 @@ outputs:
 // ===== Preview =====
 
 func TestPreviewAndUp(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -363,6 +375,7 @@ outputs:
 }
 
 func TestPreviewOnlyDoesNotSaveCheckpoint(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -407,6 +420,7 @@ outputs:
 // ===== Up (Update) =====
 
 func TestUpWithJournaling(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -433,6 +447,7 @@ outputs:
 }
 
 func TestWithoutJournaling(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -467,6 +482,7 @@ outputs:
 }
 
 func TestMultipleUpdates(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -511,6 +527,7 @@ outputs:
 }
 
 func TestStackVersionIncrementsOnUpdates(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -557,6 +574,7 @@ outputs:
 }
 
 func TestStackOutput(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -586,6 +604,7 @@ outputs:
 }
 
 func TestStackShowURNs(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -608,6 +627,7 @@ outputs:
 }
 
 func TestResourceCountInStackListing(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -665,6 +685,7 @@ outputs:
 // ===== Destroy =====
 
 func TestUpdateThenDestroy(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -703,6 +724,7 @@ outputs:
 }
 
 func TestDestroyThenRedeploy(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -739,6 +761,7 @@ outputs:
 // ===== Refresh =====
 
 func TestRefresh(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -765,6 +788,7 @@ outputs:
 }
 
 func TestRefreshAfterUpdateWithChanges(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -810,6 +834,7 @@ outputs:
 }
 
 func TestRefreshOnEmptyStack(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -842,6 +867,7 @@ outputs:
 // ===== Export / Import =====
 
 func TestExportImportRoundTrip(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -888,6 +914,7 @@ outputs:
 }
 
 func TestExportSpecificVersion(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -949,6 +976,7 @@ outputs:
 }
 
 func TestExportImportCrossProject(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: project-source
@@ -986,6 +1014,7 @@ outputs:
 }
 
 func TestImportOnFreshStack(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1017,6 +1046,7 @@ runtime: yaml
 }
 
 func TestImportThenUpdate(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1047,6 +1077,7 @@ outputs:
 // ===== Checkpoint / Journaling Modes =====
 
 func TestCheckpointDeltaProtocol(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1103,6 +1134,7 @@ outputs:
 }
 
 func TestJournalingToCheckpointSwitch(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1146,6 +1178,7 @@ outputs:
 }
 
 func TestCheckpointThenJournalingMode(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1199,6 +1232,7 @@ outputs:
 // ===== Config & Secrets =====
 
 func TestConfigSecretsRoundTrip(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1239,6 +1273,7 @@ outputs:
 }
 
 func TestStackConfigEndpoint(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1278,6 +1313,7 @@ outputs:
 // ===== Cancel =====
 
 func TestCancelUpdate(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1333,6 +1369,7 @@ outputs:
 }
 
 func TestCancelNoActiveUpdate(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1351,6 +1388,7 @@ runtime: yaml
 // ===== Concurrent Update Locking =====
 
 func TestConcurrentUpdateLocking(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1422,6 +1460,7 @@ outputs:
 // ===== History =====
 
 func TestStackHistory(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1454,6 +1493,7 @@ outputs:
 }
 
 func TestUpdateRefreshDestroyKindsInHistory(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1501,6 +1541,7 @@ outputs:
 }
 
 func TestHistoryPagination(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1557,6 +1598,7 @@ outputs:
 }
 
 func TestHistoryManyEntriesGetByVersion(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1613,6 +1655,7 @@ outputs:
 // ===== Large State =====
 
 func TestLargeState(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	var outputs strings.Builder
@@ -1657,6 +1700,7 @@ func TestLargeState(t *testing.T) {
 // ===== Failed Update =====
 
 func TestFailedUpdateDoesNotCorruptState(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: test-project
@@ -1709,6 +1753,7 @@ resources:
 // ===== Full Lifecycle =====
 
 func TestFullLifecycleWithJournaling(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir := makeYAMLProject(t, `name: lifecycle-test
@@ -1795,6 +1840,7 @@ outputs:
 // ===== Multiple Projects =====
 
 func TestMultipleProjectsInOrg(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir1 := makeYAMLProject(t, `name: project-alpha
@@ -1858,6 +1904,7 @@ outputs:
 }
 
 func TestMultipleStacksResourceCounts(t *testing.T) {
+	requireCLI(t)
 	tb := startBackend(t)
 
 	dir1 := makeYAMLProject(t, `name: test-project

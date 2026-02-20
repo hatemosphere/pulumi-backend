@@ -45,7 +45,7 @@ jobs:
         run: go install gotest.tools/gotestsum@v1.13.0
 
       - name: Unit tests
-        run: gotestsum --junitfile unit-results.xml -- -timeout 120s ./internal/... -count=1
+        run: gotestsum --junitfile unit-results.xml -- -v -timeout 120s ./internal/... -count=1
 
       - name: Test report
         uses: mikepenz/action-junit-report@74626db7353a25a20a72816467ebf035f674c5f8 # v6.2.0
@@ -80,7 +80,7 @@ jobs:
         run: curl -sfo pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json
 
       - name: HTTP API and spec compliance tests
-        run: gotestsum --junitfile api-results.xml -- -timeout 120s ./tests/ -skip '^TestCLI' -count=1
+        run: gotestsum --junitfile api-results.xml -- -v -timeout 120s ./tests/ -count=1
 
       - name: Test report
         uses: mikepenz/action-junit-report@74626db7353a25a20a72816467ebf035f674c5f8 # v6.2.0
@@ -121,7 +121,7 @@ jobs:
         run: curl -sfo pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json
 
       - name: All tests (including CLI integration)
-        run: gotestsum --junitfile cli-results.xml -- -timeout 600s ./tests/ -count=1
+        run: gotestsum --junitfile cli-results.xml -- -v -timeout 600s ./tests/ -count=1
 
       - name: Test report
         uses: mikepenz/action-junit-report@74626db7353a25a20a72816467ebf035f674c5f8 # v6.2.0

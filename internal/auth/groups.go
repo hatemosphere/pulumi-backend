@@ -7,6 +7,7 @@ import (
 
 	"golang.org/x/oauth2/google"
 	admin "google.golang.org/api/admin/directory/v1"
+	"google.golang.org/api/impersonate"
 	"google.golang.org/api/option"
 )
 
@@ -19,16 +20,17 @@ type GroupsResolver struct {
 
 // NewGroupsResolver creates a resolver that queries the Admin SDK for group membership.
 //
-// If saKeyFile is provided, it is read and used for domain-wide delegation via
-// JWT credentials with Subject set to adminEmail. If saKeyFile is empty,
-// Application Default Credentials (ADC) are used instead — this supports
-// Workload Identity in GKE, GOOGLE_APPLICATION_CREDENTIALS env var, and
-// gcloud auth application-default login. The underlying service account must
-// have domain-wide delegation with the AdminDirectoryGroupReadonlyScope scope.
-func NewGroupsResolver(ctx context.Context, saKeyFile, adminEmail string, transitive bool) (*GroupsResolver, error) {
+// Credentials are resolved in order:
+//  1. saKeyFile set: read the JSON key and use JWT credentials with Subject for DWD.
+//  2. saEmail set (no key): use ADC + IAM impersonate API with Subject for keyless DWD.
+//     Works with Workload Identity, gcloud ADC, or GOOGLE_APPLICATION_CREDENTIALS.
+//  3. Neither: use plain ADC with Subject (works only when ADC is a SA key).
+func NewGroupsResolver(ctx context.Context, saKeyFile, saEmail, adminEmail string, transitive bool) (*GroupsResolver, error) {
 	var opts []option.ClientOption
 
-	if saKeyFile != "" {
+	switch {
+	case saKeyFile != "":
+		// Explicit SA key file — JWT credentials with domain-wide delegation.
 		jsonKey, err := os.ReadFile(saKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("read service account key: %w", err)
@@ -39,7 +41,21 @@ func NewGroupsResolver(ctx context.Context, saKeyFile, adminEmail string, transi
 		}
 		jwtConfig.Subject = adminEmail
 		opts = append(opts, option.WithHTTPClient(jwtConfig.Client(ctx)))
-	} else {
+
+	case saEmail != "":
+		// Keyless: use ADC to impersonate the SA with DWD via IAM signJwt.
+		ts, err := impersonate.CredentialsTokenSource(ctx, impersonate.CredentialsConfig{
+			TargetPrincipal: saEmail,
+			Scopes:          []string{admin.AdminDirectoryGroupReadonlyScope},
+			Subject:         adminEmail,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("impersonate SA for DWD: %w", err)
+		}
+		opts = append(opts, option.WithTokenSource(ts))
+
+	default:
+		// Plain ADC — works when ADC is a SA key with DWD configured.
 		creds, err := google.FindDefaultCredentialsWithParams(ctx, google.CredentialsParams{
 			Scopes:  []string{admin.AdminDirectoryGroupReadonlyScope},
 			Subject: adminEmail,

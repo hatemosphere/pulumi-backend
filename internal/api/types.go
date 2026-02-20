@@ -558,3 +558,37 @@ type CreateBackupOutput struct {
 		Path string `json:"path"`
 	}
 }
+
+// RevokeUserTokensInput is the path parameter for revoking a user's tokens.
+type RevokeUserTokensInput struct {
+	UserName string `path:"userName" doc:"User whose tokens to revoke"`
+}
+
+// RevokeUserTokensOutput is the response from revoking a user's tokens.
+type RevokeUserTokensOutput struct {
+	Body struct {
+		Revoked int64 `json:"revoked" doc:"Number of tokens revoked"`
+	}
+}
+
+// ListUserTokensInput is the path parameter for listing a user's tokens.
+type ListUserTokensInput struct {
+	UserName string `path:"userName" doc:"User whose tokens to list"`
+}
+
+// AdminTokenInfo is a summary of a stored token (no secrets exposed).
+type AdminTokenInfo struct {
+	TokenHashPrefix string `json:"tokenHashPrefix" doc:"First 8 chars of the token hash"`
+	Description     string `json:"description"`
+	CreatedAt       int64  `json:"createdAt"`
+	LastUsedAt      *int64 `json:"lastUsedAt,omitempty"`
+	ExpiresAt       *int64 `json:"expiresAt,omitempty"`
+	HasRefreshToken bool   `json:"hasRefreshToken" doc:"Whether a Google refresh token is stored"`
+}
+
+// ListUserTokensOutput is the response listing a user's tokens.
+type ListUserTokensOutput struct {
+	Body struct {
+		Tokens []AdminTokenInfo `json:"tokens"`
+	}
+}

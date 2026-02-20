@@ -62,6 +62,11 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
+// DB returns the underlying *sql.DB for test access. Do not use in production code.
+func (s *SQLiteStore) DB() *sql.DB {
+	return s.db
+}
+
 func (s *SQLiteStore) Backup(ctx context.Context, destPath string) error {
 	_, err := s.db.ExecContext(ctx, "VACUUM INTO ?", destPath)
 	return err
@@ -74,6 +79,8 @@ func (s *SQLiteStore) migrate() error {
 	// Additive migrations for existing databases.
 	for _, m := range []string{
 		`ALTER TABLE stacks ADD COLUMN resource_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE tokens ADD COLUMN refresh_token TEXT DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_tokens_user ON tokens(user_name)`,
 	} {
 		_, _ = s.db.Exec(m) // Ignore "duplicate column" errors.
 	}
@@ -178,6 +185,7 @@ CREATE TABLE IF NOT EXISTS tokens (
     token_hash TEXT PRIMARY KEY,
     user_name TEXT NOT NULL,
     description TEXT DEFAULT '',
+    refresh_token TEXT DEFAULT '',
     created_at INTEGER NOT NULL,
     last_used_at INTEGER,
     expires_at INTEGER
@@ -870,20 +878,20 @@ func (s *SQLiteStore) CreateToken(ctx context.Context, t *Token) error {
 		expiresAt = &e
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO tokens (token_hash, user_name, description, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-		t.TokenHash, t.UserName, t.Description, time.Now().Unix(), expiresAt)
+		`INSERT INTO tokens (token_hash, user_name, description, refresh_token, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		t.TokenHash, t.UserName, t.Description, t.RefreshToken, time.Now().Unix(), expiresAt)
 	return err
 }
 
 func (s *SQLiteStore) GetToken(ctx context.Context, tokenHash string) (*Token, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT token_hash, user_name, description, created_at, last_used_at, expires_at FROM tokens WHERE token_hash=?`,
+		`SELECT token_hash, user_name, description, refresh_token, created_at, last_used_at, expires_at FROM tokens WHERE token_hash=?`,
 		tokenHash)
 
 	t := &Token{}
 	var createdAt int64
 	var lastUsedAt, expiresAt *int64
-	err := row.Scan(&t.TokenHash, &t.UserName, &t.Description, &createdAt, &lastUsedAt, &expiresAt)
+	err := row.Scan(&t.TokenHash, &t.UserName, &t.Description, &t.RefreshToken, &createdAt, &lastUsedAt, &expiresAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -915,9 +923,18 @@ func (s *SQLiteStore) DeleteToken(ctx context.Context, tokenHash string) error {
 	return err
 }
 
+func (s *SQLiteStore) DeleteTokensByUser(ctx context.Context, userName string) (int64, error) {
+	result, err := s.db.ExecContext(ctx,
+		`DELETE FROM tokens WHERE user_name=?`, userName)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (s *SQLiteStore) ListTokensByUser(ctx context.Context, userName string) ([]Token, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT token_hash, user_name, description, created_at, last_used_at, expires_at
+		`SELECT token_hash, user_name, description, refresh_token, created_at, last_used_at, expires_at
 		 FROM tokens WHERE user_name=? ORDER BY created_at DESC`, userName)
 	if err != nil {
 		return nil, err
@@ -929,7 +946,7 @@ func (s *SQLiteStore) ListTokensByUser(ctx context.Context, userName string) ([]
 		var t Token
 		var createdAt int64
 		var lastUsedAt, expiresAt *int64
-		if err := rows.Scan(&t.TokenHash, &t.UserName, &t.Description, &createdAt, &lastUsedAt, &expiresAt); err != nil {
+		if err := rows.Scan(&t.TokenHash, &t.UserName, &t.Description, &t.RefreshToken, &createdAt, &lastUsedAt, &expiresAt); err != nil {
 			return nil, err
 		}
 		t.CreatedAt = time.Unix(createdAt, 0)

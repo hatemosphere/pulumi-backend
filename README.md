@@ -34,6 +34,13 @@ Then point the CLI at it:
 pulumi login http://localhost:8080
 ```
 
+With Google OIDC auth, set `PULUMI_CONSOLE_DOMAIN` for automatic browser-based login (no token copy-paste):
+
+```bash
+export PULUMI_CONSOLE_DOMAIN=localhost:8080
+pulumi login http://localhost:8080  # opens browser for Google sign-in
+```
+
 ### Configuration
 
 All flags have corresponding environment variables with the `PULUMI_BACKEND_` prefix.
@@ -76,54 +83,16 @@ If no master key is provided, one is auto-generated and printed to stderr. Persi
 
 #### Authentication
 
+Three auth modes: `single-tenant` (default), `google`, and `jwt`.
+
 | Flag | Env | Default | Description |
 |---|---|---|---|
 | `-auth-mode` | `PULUMI_BACKEND_AUTH_MODE` | `single-tenant` | `single-tenant`, `google`, or `jwt` |
+| `-rbac-config` | `PULUMI_BACKEND_RBAC_CONFIG` | | Path to RBAC config YAML (disabled if not set) |
 
-**Google OIDC mode** (`-auth-mode=google`):
-
-| Flag | Env | Description |
-|---|---|---|
-| `-google-client-id` | `PULUMI_BACKEND_GOOGLE_CLIENT_ID` | OAuth2 client ID (required) |
-| `-google-sa-key` | `PULUMI_BACKEND_GOOGLE_SA_KEY` | Service account JSON key for Admin SDK groups |
-| `-google-admin-email` | `PULUMI_BACKEND_GOOGLE_ADMIN_EMAIL` | Workspace super-admin email for groups impersonation |
-| `-google-allowed-domains` | `PULUMI_BACKEND_GOOGLE_ALLOWED_DOMAINS` | Comma-separated allowed hosted domains |
-| `-google-transitive-groups` | `PULUMI_BACKEND_GOOGLE_TRANSITIVE_GROUPS` | Resolve nested group memberships |
-| `-token-ttl` | `PULUMI_BACKEND_TOKEN_TTL` | Backend-issued token lifetime (default `24h`) |
-| `-groups-cache-ttl` | `PULUMI_BACKEND_GROUPS_CACHE_TTL` | Group membership cache TTL (default `5m`) |
-
-**JWT mode** (`-auth-mode=jwt`):
-
-| Flag | Env | Description |
-|---|---|---|
-| `-jwt-signing-key` | `PULUMI_BACKEND_JWT_SIGNING_KEY` | HMAC secret or path to PEM public key (required) |
-| `-jwt-issuer` | `PULUMI_BACKEND_JWT_ISSUER` | Expected `iss` claim (optional) |
-| `-jwt-audience` | `PULUMI_BACKEND_JWT_AUDIENCE` | Expected `aud` claim (optional) |
-| `-jwt-groups-claim` | `PULUMI_BACKEND_JWT_GROUPS_CLAIM` | Claim name for groups (default `groups`) |
-| `-jwt-username-claim` | `PULUMI_BACKEND_JWT_USERNAME_CLAIM` | Claim for username (default `sub`) |
-
-#### RBAC
-
-| Flag | Env | Description |
-|---|---|---|
-| `-rbac-config` | `PULUMI_BACKEND_RBAC_CONFIG` | Path to RBAC config YAML (disabled if not set) |
-
-Example `rbac.yaml`:
-
-```yaml
-defaultPermission: read
-groupRoles:
-  - group: "engineers@example.com"
-    permission: write
-  - group: "ops@example.com"
-    permission: admin
-stackPolicies:
-  - group: "engineers@example.com"
-    stackPattern: "myorg/staging/*"
-    permission: admin
-```
-
-Permission levels: `none < read < write < admin`. Single-tenant mode bypasses RBAC entirely.
+- **[Google OIDC setup guide](docs/auth-google.md)** — OAuth2, Workspace groups, keyless DWD, GKE Workload Identity
+- **[JWT setup guide](docs/auth-jwt.md)** — HMAC/RSA/ECDSA, Dex, Keycloak integration
+- **[RBAC configuration](docs/rbac.md)** — Group roles, stack policies, permission levels
 
 ## API compatibility
 
@@ -138,7 +107,10 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 - Update history with pagination
 - User/org endpoints
 - Authentication (single-tenant, Google OIDC, JWT)
+- Browser login page (`GET /login`) and automatic CLI login (`GET /cli-login`) with Google OAuth2
 - RBAC (group-based, with stack-level policy overrides)
+- Admin token management (`GET/DELETE /api/admin/tokens/{userName}`)
+- Google refresh token re-validation (detects deactivated users mid-session)
 - Prometheus metrics (`/metrics`)
 - OpenAPI 3.1 spec (`GET /api/openapi`)
 - Database backup (`POST /api/admin/backup`)
@@ -146,13 +118,14 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 ## Tests
 
 ```bash
-go test ./internal/...                                   # unit tests
-go test ./tests/ -skip '^TestCLI'                        # HTTP API + auth integration tests (no pulumi needed)
-go test ./tests/ -run TestCLI                             # CLI integration tests (requires pulumi in PATH)
-go test -v ./tests/ -run TestAPISpecSchemaCompliance      # OpenAPI spec compliance
-go test -bench . -benchmem ./internal/engine              # run engine benchmarks (not in CI)
-go test -timeout 600s ./tests/ -count=1                   # full suite
+go test ./internal/...                                    # unit tests
+go test -timeout 120s ./tests/ -count=1                   # API + auth tests (CLI tests auto-skip if pulumi not in PATH)
+go test -v ./tests/ -run TestAPISpecSchemaCompliance       # OpenAPI spec compliance
+go test -bench . -benchmem ./internal/engine               # engine benchmarks
+go test -timeout 600s ./tests/ -count=1                    # full suite (with pulumi in PATH)
 ```
+
+GCP-dependent tests (`TestGoogleAuthE2E`, `TestGroupsResolutionADC`) require Google credentials and auto-skip when env vars are not set.
 
 ## TODO
 

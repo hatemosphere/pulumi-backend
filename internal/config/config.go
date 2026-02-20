@@ -46,8 +46,10 @@ type Config struct {
 	AuthMode string
 	// Google auth settings (required when AuthMode == "google").
 	GoogleClientID         string        // OAuth2 client ID for JWT audience verification
-	GoogleSAKeyFile        string        // Optional path to SA JSON key for Admin SDK; uses ADC if empty
-	GoogleAdminEmail       string        // Workspace super-admin email for impersonation
+	GoogleSAKeyFile        string        // Optional path to SA JSON key for Admin SDK
+	GoogleSAEmail          string        // SA email for keyless DWD via IAM impersonation
+	GoogleAdminEmail       string        // Workspace super-admin email for DWD subject
+	GoogleClientSecret     string        // OAuth2 client secret (for browser login flow)
 	GoogleAllowedDomains   string        // Comma-separated allowed hosted domains
 	GoogleTransitiveGroups bool          // Resolve nested group memberships
 	TokenTTL               time.Duration // Backend-issued token lifetime
@@ -96,8 +98,10 @@ func Parse() *Config {
 	// Auth flags.
 	flag.StringVar(&c.AuthMode, "auth-mode", "single-tenant", "authentication mode: single-tenant, google, or jwt")
 	flag.StringVar(&c.GoogleClientID, "google-client-id", "", "Google OAuth2 client ID for JWT verification")
-	flag.StringVar(&c.GoogleSAKeyFile, "google-sa-key", "", "optional path to SA JSON key for Admin SDK (uses ADC if empty)")
-	flag.StringVar(&c.GoogleAdminEmail, "google-admin-email", "", "Workspace super-admin email for impersonation")
+	flag.StringVar(&c.GoogleSAKeyFile, "google-sa-key", "", "optional path to SA JSON key for Admin SDK")
+	flag.StringVar(&c.GoogleSAEmail, "google-sa-email", "", "SA email for keyless DWD via IAM impersonation")
+	flag.StringVar(&c.GoogleAdminEmail, "google-admin-email", "", "Workspace super-admin email for DWD subject")
+	flag.StringVar(&c.GoogleClientSecret, "google-client-secret", "", "Google OAuth2 client secret (required for browser login)")
 	flag.StringVar(&c.GoogleAllowedDomains, "google-allowed-domains", "", "comma-separated allowed hosted domains")
 	flag.BoolVar(&c.GoogleTransitiveGroups, "google-transitive-groups", false, "resolve nested group memberships")
 	flag.DurationVar(&c.TokenTTL, "token-ttl", 24*time.Hour, "backend-issued token lifetime")
@@ -186,8 +190,14 @@ func Parse() *Config {
 	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_SA_KEY"); v != "" {
 		c.GoogleSAKeyFile = v
 	}
+	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_SA_EMAIL"); v != "" {
+		c.GoogleSAEmail = v
+	}
 	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_ADMIN_EMAIL"); v != "" {
 		c.GoogleAdminEmail = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_CLIENT_SECRET"); v != "" {
+		c.GoogleClientSecret = v
 	}
 	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_ALLOWED_DOMAINS"); v != "" {
 		c.GoogleAllowedDomains = v

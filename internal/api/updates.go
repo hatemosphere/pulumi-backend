@@ -419,6 +419,27 @@ func (s *Server) registerHistory(api huma.API) {
 
 // --- Admin ---
 
+// requireAdmin checks that the authenticated user has admin access. In single-tenant
+// mode this is always true (IsAdmin flag). In Google/JWT mode, admin is granted via
+// RBAC (group with "admin" permission).
+func (s *Server) requireAdmin(ctx context.Context) error {
+	identity := auth.IdentityFromContext(ctx)
+	if identity == nil {
+		return huma.NewError(http.StatusForbidden, "admin access required")
+	}
+	if identity.IsAdmin {
+		return nil
+	}
+	// In RBAC mode, check if the user has a global admin role (empty stack path).
+	if s.rbac != nil {
+		perm := s.rbac.Resolve(identity, "", "", "")
+		if perm >= auth.PermissionAdmin {
+			return nil
+		}
+	}
+	return huma.NewError(http.StatusForbidden, "admin access required")
+}
+
 func (s *Server) registerAdmin(api huma.API) {
 	huma.Register(api, huma.Operation{
 		OperationID: "createBackup",
@@ -426,9 +447,8 @@ func (s *Server) registerAdmin(api huma.API) {
 		Path:        "/api/admin/backup",
 		Tags:        []string{"Admin"},
 	}, func(ctx context.Context, input *struct{}) (*CreateBackupOutput, error) {
-		identity := auth.IdentityFromContext(ctx)
-		if identity == nil || !identity.IsAdmin {
-			return nil, huma.NewError(http.StatusForbidden, "admin access required")
+		if err := s.requireAdmin(ctx); err != nil {
+			return nil, err
 		}
 		path, err := s.engine.Backup(ctx)
 		if err != nil {
@@ -436,6 +456,78 @@ func (s *Server) registerAdmin(api huma.API) {
 		}
 		out := &CreateBackupOutput{}
 		out.Body.Path = path
+		return out, nil
+	})
+
+	// Token management (only available in Google auth mode with a token store).
+	if s.tokenStore != nil {
+		s.registerAdminTokens(api)
+	}
+}
+
+func (s *Server) registerAdminTokens(api huma.API) {
+	// List a user's tokens (admin only).
+	huma.Register(api, huma.Operation{
+		OperationID: "listUserTokens",
+		Method:      http.MethodGet,
+		Path:        "/api/admin/tokens/{userName}",
+		Tags:        []string{"Admin"},
+	}, func(ctx context.Context, input *ListUserTokensInput) (*ListUserTokensOutput, error) {
+		if err := s.requireAdmin(ctx); err != nil {
+			return nil, err
+		}
+
+		tokens, err := s.tokenStore.ListTokensByUser(ctx, input.UserName)
+		if err != nil {
+			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+		}
+
+		out := &ListUserTokensOutput{}
+		for _, t := range tokens {
+			info := AdminTokenInfo{
+				TokenHashPrefix: t.TokenHash[:min(8, len(t.TokenHash))],
+				Description:     t.Description,
+				CreatedAt:       t.CreatedAt.Unix(),
+				HasRefreshToken: t.RefreshToken != "",
+			}
+			if t.LastUsedAt != nil {
+				lu := t.LastUsedAt.Unix()
+				info.LastUsedAt = &lu
+			}
+			if t.ExpiresAt != nil {
+				ea := t.ExpiresAt.Unix()
+				info.ExpiresAt = &ea
+			}
+			out.Body.Tokens = append(out.Body.Tokens, info)
+		}
+		return out, nil
+	})
+
+	// Revoke all tokens for a user (admin only).
+	huma.Register(api, huma.Operation{
+		OperationID: "revokeUserTokens",
+		Method:      http.MethodDelete,
+		Path:        "/api/admin/tokens/{userName}",
+		Tags:        []string{"Admin"},
+	}, func(ctx context.Context, input *RevokeUserTokensInput) (*RevokeUserTokensOutput, error) {
+		if err := s.requireAdmin(ctx); err != nil {
+			return nil, err
+		}
+
+		identity := auth.IdentityFromContext(ctx)
+		revoked, err := s.tokenStore.DeleteTokensByUser(ctx, input.UserName)
+		if err != nil {
+			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+		}
+
+		slog.Info("admin revoked user tokens",
+			"admin", identity.UserName,
+			"targetUser", input.UserName,
+			"revoked", revoked,
+		)
+
+		out := &RevokeUserTokensOutput{}
+		out.Body.Revoked = revoked
 		return out, nil
 	})
 }
