@@ -9,18 +9,18 @@ import (
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
-func (s *Server) registerGoogleAuth(api huma.API) {
+func (s *Server) registerTokenExchange(api huma.API) {
 	huma.Register(api, huma.Operation{
-		OperationID: "googleTokenExchange",
+		OperationID: "tokenExchange",
 		Method:      http.MethodPost,
-		Path:        "/api/auth/google",
+		Path:        "/api/auth/token-exchange",
 		Tags:        []string{"Auth"},
-	}, func(ctx context.Context, input *GoogleTokenExchangeInput) (*GoogleTokenExchangeOutput, error) {
+	}, func(ctx context.Context, input *TokenExchangeInput) (*TokenExchangeOutput, error) {
 		if input.Body.IDToken == "" {
 			return nil, huma.NewError(http.StatusBadRequest, "idToken is required")
 		}
 
-		result, err := s.googleAuth.Exchange(ctx, input.Body.IDToken)
+		result, err := s.oidcAuth.Exchange(ctx, input.Body.IDToken)
 		if err != nil {
 			return nil, huma.NewError(http.StatusUnauthorized, err.Error())
 		}
@@ -29,13 +29,14 @@ func (s *Server) registerGoogleAuth(api huma.API) {
 		if err := s.tokenStore.CreateToken(ctx, &storage.Token{
 			TokenHash:   result.TokenHash,
 			UserName:    result.UserName,
-			Description: "google-auth",
+			Description: "oidc-token-exchange",
+			Groups:      result.Groups,
 			ExpiresAt:   &result.ExpiresAt,
 		}); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, "failed to store token")
 		}
 
-		out := &GoogleTokenExchangeOutput{}
+		out := &TokenExchangeOutput{}
 		out.Body.Token = result.Token
 		out.Body.UserName = result.UserName
 		out.Body.ExpiresAt = result.ExpiresAt.Unix()

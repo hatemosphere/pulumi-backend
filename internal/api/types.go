@@ -537,13 +537,13 @@ type HealthCheckOutput struct {
 
 // --- Auth ---
 
-type GoogleTokenExchangeInput struct {
+type TokenExchangeInput struct {
 	Body struct {
 		IDToken string `json:"idToken"`
 	}
 }
 
-type GoogleTokenExchangeOutput struct {
+type TokenExchangeOutput struct {
 	Body struct {
 		Token     string `json:"accessToken"` //nolint:gosec // JSON API field, not a credential
 		UserName  string `json:"userName"`

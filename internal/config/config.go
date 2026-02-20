@@ -42,7 +42,7 @@ type Config struct {
 	// GCP KMS key resource name (required when SecretsProvider == "gcpkms").
 	KMSKeyResourceName string
 
-	// Auth mode: "single-tenant" (default), "google", or "jwt".
+	// Auth mode: "single-tenant" (default), "google", "oidc", or "jwt".
 	AuthMode string
 	// Google auth settings (required when AuthMode == "google").
 	GoogleClientID         string        // OAuth2 client ID for JWT audience verification
@@ -54,6 +54,15 @@ type Config struct {
 	GoogleTransitiveGroups bool          // Resolve nested group memberships
 	TokenTTL               time.Duration // Backend-issued token lifetime
 	GroupsCacheTTL         time.Duration // Group membership cache TTL
+	// Generic OIDC settings (required when AuthMode == "oidc").
+	OIDCIssuer         string // OIDC provider discovery URL
+	OIDCClientID       string // OAuth2 client ID
+	OIDCClientSecret   string // OAuth2 client secret
+	OIDCAllowedDomains string // Comma-separated allowed email domains
+	OIDCScopes         string // Additional scopes (default: "profile,email")
+	OIDCGroupsClaim    string // Claim key for groups (default: "groups")
+	OIDCUsernameClaim  string // Claim key for username (default: "email")
+	OIDCProviderName   string // Display name for login page (default: "SSO")
 	// JWT auth settings (required when AuthMode == "jwt").
 	JWTSigningKey    string // HMAC secret string or path to PEM public key file
 	JWTIssuer        string // Expected JWT issuer (optional)
@@ -96,7 +105,7 @@ func Parse() *Config {
 	flag.StringVar(&c.KMSKeyResourceName, "kms-key", "", "GCP KMS key resource name (required for gcpkms provider)")
 
 	// Auth flags.
-	flag.StringVar(&c.AuthMode, "auth-mode", "single-tenant", "authentication mode: single-tenant, google, or jwt")
+	flag.StringVar(&c.AuthMode, "auth-mode", "single-tenant", "authentication mode: single-tenant, google, oidc, or jwt")
 	flag.StringVar(&c.GoogleClientID, "google-client-id", "", "Google OAuth2 client ID for JWT verification")
 	flag.StringVar(&c.GoogleSAKeyFile, "google-sa-key", "", "optional path to SA JSON key for Admin SDK")
 	flag.StringVar(&c.GoogleSAEmail, "google-sa-email", "", "SA email for keyless DWD via IAM impersonation")
@@ -106,6 +115,15 @@ func Parse() *Config {
 	flag.BoolVar(&c.GoogleTransitiveGroups, "google-transitive-groups", false, "resolve nested group memberships")
 	flag.DurationVar(&c.TokenTTL, "token-ttl", 24*time.Hour, "backend-issued token lifetime")
 	flag.DurationVar(&c.GroupsCacheTTL, "groups-cache-ttl", 5*time.Minute, "group membership cache TTL")
+	// Generic OIDC flags.
+	flag.StringVar(&c.OIDCIssuer, "oidc-issuer", "", "OIDC provider discovery URL (required for oidc mode)")
+	flag.StringVar(&c.OIDCClientID, "oidc-client-id", "", "OIDC OAuth2 client ID")
+	flag.StringVar(&c.OIDCClientSecret, "oidc-client-secret", "", "OIDC OAuth2 client secret")
+	flag.StringVar(&c.OIDCAllowedDomains, "oidc-allowed-domains", "", "comma-separated allowed email domains")
+	flag.StringVar(&c.OIDCScopes, "oidc-scopes", "profile,email", "additional OIDC scopes beyond openid")
+	flag.StringVar(&c.OIDCGroupsClaim, "oidc-groups-claim", "groups", "OIDC claim key for group memberships")
+	flag.StringVar(&c.OIDCUsernameClaim, "oidc-username-claim", "email", "OIDC claim key for username")
+	flag.StringVar(&c.OIDCProviderName, "oidc-provider-name", "SSO", "display name for login page")
 	// JWT auth flags.
 	flag.StringVar(&c.JWTSigningKey, "jwt-signing-key", "", "HMAC secret or path to PEM public key for JWT verification")
 	flag.StringVar(&c.JWTIssuer, "jwt-issuer", "", "expected JWT issuer claim (optional)")
@@ -214,6 +232,30 @@ func Parse() *Config {
 		if d, err := time.ParseDuration(v); err == nil {
 			c.GroupsCacheTTL = d
 		}
+	}
+	if v := os.Getenv("PULUMI_BACKEND_OIDC_ISSUER"); v != "" {
+		c.OIDCIssuer = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_OIDC_CLIENT_ID"); v != "" {
+		c.OIDCClientID = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_OIDC_CLIENT_SECRET"); v != "" {
+		c.OIDCClientSecret = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_OIDC_ALLOWED_DOMAINS"); v != "" {
+		c.OIDCAllowedDomains = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_OIDC_SCOPES"); v != "" {
+		c.OIDCScopes = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_OIDC_GROUPS_CLAIM"); v != "" {
+		c.OIDCGroupsClaim = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_OIDC_USERNAME_CLAIM"); v != "" {
+		c.OIDCUsernameClaim = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_OIDC_PROVIDER_NAME"); v != "" {
+		c.OIDCProviderName = v
 	}
 	if v := os.Getenv("PULUMI_BACKEND_JWT_SIGNING_KEY"); v != "" {
 		c.JWTSigningKey = v

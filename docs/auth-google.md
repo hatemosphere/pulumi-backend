@@ -81,7 +81,7 @@ The browser login flow:
 4. ID token is validated and a backend access token is minted
 5. Token is displayed on `/login/callback` with copy-to-clipboard
 
-Without the client secret, the `/login` page is not available — users must obtain an ID token externally (e.g., via `gcloud auth print-identity-token`) and POST it to `/api/auth/google`.
+Without the client secret, the `/login` page is not available — users must obtain an ID token externally (e.g., via `gcloud auth print-identity-token`) and POST it to `/api/auth/token-exchange`.
 
 ### Automatic CLI Login (Zero Copy-Paste)
 
@@ -263,7 +263,7 @@ No SA key file needed. The backend uses `google.golang.org/api/impersonate` to c
 | Flag | Env | Description |
 |---|---|---|
 | `-google-client-id` | `PULUMI_BACKEND_GOOGLE_CLIENT_ID` | OAuth2 client ID (required) |
-| `-google-client-secret` | `PULUMI_BACKEND_GOOGLE_CLIENT_SECRET` | OAuth2 client secret (enables browser login at `/login`) |
+| `-google-client-secret` | `PULUMI_BACKEND_GOOGLE_CLIENT_SECRET` | OAuth2 client secret (required for browser login) |
 | `-google-sa-key` | `PULUMI_BACKEND_GOOGLE_SA_KEY` | Path to SA JSON key for Admin SDK groups |
 | `-google-sa-email` | `PULUMI_BACKEND_GOOGLE_SA_EMAIL` | SA email for keyless DWD via IAM impersonation |
 | `-google-admin-email` | `PULUMI_BACKEND_GOOGLE_ADMIN_EMAIL` | Workspace super-admin email for DWD subject |
@@ -278,7 +278,7 @@ Backend tokens are issued during Google OAuth login and stored in SQLite.
 
 - **TTL**: Configurable via `-token-ttl` (default `24h`). Expired tokens are rejected on use.
 - **Refresh token re-validation**: When users log in via the browser (`/login`) or CLI (`/cli-login`), the backend stores Google's OAuth2 refresh token alongside the backend token. On each authenticated request past half the token's TTL, the backend asynchronously re-validates against Google by exchanging the refresh token for a new ID token. If Google rejects the refresh (user deactivated, consent revoked), the backend token is immediately deleted. This follows the same pattern as [Dex's Google connector](https://github.com/dexidp/dex/blob/master/connector/google/google.go).
-- **Deactivated users**: With refresh token re-validation, deactivated users are detected within half the token TTL. Without a refresh token (programmatic `POST /api/auth/google` flow), existing tokens remain valid until they expire.
+- **Deactivated users**: With refresh token re-validation, deactivated users are detected within half the token TTL. Without a refresh token (programmatic `POST /api/auth/token-exchange` flow), existing tokens remain valid until they expire.
 - **Admin revocation**: Admins can immediately revoke all tokens for a user via `DELETE /api/admin/tokens/{userName}`. List a user's tokens via `GET /api/admin/tokens/{userName}`.
 - **Short TTL**: Use a short `-token-ttl` (e.g. `1h`) for tighter security.
 

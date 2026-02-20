@@ -85,6 +85,7 @@ type Token struct {
 	UserName     string
 	Description  string
 	RefreshToken string //nolint:gosec // field name, not a credential
+	Groups       []string
 	CreatedAt    time.Time
 	LastUsedAt   *time.Time
 	ExpiresAt    *time.Time

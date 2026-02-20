@@ -22,19 +22,18 @@ import (
 
 // Server is the HTTP API server.
 type Server struct {
-	engine             *engine.Manager
-	defaultOrg         string
-	defaultUser        string
-	deltaCutoffBytes   int
-	historyPageSize    int
-	humaAPI            huma.API
-	authMode           string                    // "single-tenant" (default), "google", or "jwt"
-	tokenStore         storage.Store             // required in google auth mode
-	googleAuth         *auth.GoogleAuthenticator // required in google auth mode
-	groupsCache        *auth.GroupsCache         // optional: resolves groups in google auth mode
-	jwtAuth            *auth.JWTAuthenticator    // required in jwt auth mode
-	rbac               *auth.RBACResolver        // nil = no RBAC enforcement
-	googleClientSecret string                    // OAuth2 client secret for browser login
+	engine           *engine.Manager
+	defaultOrg       string
+	defaultUser      string
+	deltaCutoffBytes int
+	historyPageSize  int
+	humaAPI          huma.API
+	authMode         string                 // "single-tenant" (default), "google", "oidc", or "jwt"
+	tokenStore       storage.Store          // required in google/oidc auth modes
+	oidcAuth         auth.OIDCAuthenticator // required in google/oidc auth modes
+	groupsCache      *auth.GroupsCache      // optional: resolves groups via external API (e.g. Google Admin SDK)
+	jwtAuth          *auth.JWTAuthenticator // required in jwt auth mode
+	rbac             *auth.RBACResolver     // nil = no RBAC enforcement
 }
 
 // NewServer creates a new API server.
@@ -65,7 +64,7 @@ func WithHistoryPageSize(size int) ServerOption {
 	return func(s *Server) { s.historyPageSize = size }
 }
 
-// WithAuthMode sets the authentication mode ("single-tenant", "google", or "jwt").
+// WithAuthMode sets the authentication mode ("single-tenant", "google", "oidc", or "jwt").
 func WithAuthMode(mode string) ServerOption {
 	return func(s *Server) { s.authMode = mode }
 }
@@ -75,9 +74,9 @@ func WithTokenStore(store storage.Store) ServerOption {
 	return func(s *Server) { s.tokenStore = store }
 }
 
-// WithGoogleAuth sets the Google authenticator for token exchange.
-func WithGoogleAuth(ga *auth.GoogleAuthenticator) ServerOption {
-	return func(s *Server) { s.googleAuth = ga }
+// WithOIDCAuth sets the OIDC authenticator (used for both "google" and "oidc" modes).
+func WithOIDCAuth(oa auth.OIDCAuthenticator) ServerOption {
+	return func(s *Server) { s.oidcAuth = oa }
 }
 
 // WithJWTAuth sets the JWT authenticator for stateless token validation.
@@ -85,7 +84,7 @@ func WithJWTAuth(ja *auth.JWTAuthenticator) ServerOption {
 	return func(s *Server) { s.jwtAuth = ja }
 }
 
-// WithGroupsCache sets the groups cache for resolving group memberships in google auth mode.
+// WithGroupsCache sets the groups cache for resolving group memberships.
 func WithGroupsCache(gc *auth.GroupsCache) ServerOption {
 	return func(s *Server) { s.groupsCache = gc }
 }
@@ -93,11 +92,6 @@ func WithGroupsCache(gc *auth.GroupsCache) ServerOption {
 // WithRBAC sets the RBAC resolver for permission enforcement.
 func WithRBAC(resolver *auth.RBACResolver) ServerOption {
 	return func(s *Server) { s.rbac = resolver }
-}
-
-// WithGoogleClientSecret sets the OAuth2 client secret for the browser login flow.
-func WithGoogleClientSecret(secret string) ServerOption {
-	return func(s *Server) { s.googleClientSecret = secret }
 }
 
 // humaJSONFormat uses stdlib encoding/json for huma request/response serialization.
@@ -156,7 +150,7 @@ func (s *Server) Router() http.Handler {
 	s.registerPublicRoutes(publicAPI)
 
 	// Browser login page (raw mux, serves HTML not JSON).
-	if s.googleAuth != nil && s.googleClientSecret != "" {
+	if s.oidcAuth != nil {
 		s.registerLoginPage(mux)
 	}
 
@@ -220,9 +214,9 @@ func (s *Server) registerPublicRoutes(api huma.API) {
 		}, nil
 	})
 
-	// Google token exchange (only active in google auth mode).
-	if s.googleAuth != nil {
-		s.registerGoogleAuth(api)
+	// OIDC token exchange (active in google/oidc auth modes).
+	if s.oidcAuth != nil {
+		s.registerTokenExchange(api)
 	}
 
 	// OpenAPI spec.
@@ -268,8 +262,8 @@ func (s *Server) authHumaMiddleware(api huma.API) func(ctx huma.Context, next fu
 		switch s.authMode {
 		case "jwt":
 			s.authJWTHuma(api, ctx, next, authHeader)
-		case "google":
-			s.authGoogleHuma(api, ctx, next, authHeader)
+		case "google", "oidc":
+			s.authOIDCHuma(api, ctx, next, authHeader)
 		default: // single-tenant
 			identity := &auth.UserIdentity{
 				UserName: s.defaultUser,
@@ -312,9 +306,10 @@ func (s *Server) authJWTHuma(api huma.API, ctx huma.Context, next func(huma.Cont
 	next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
 }
 
-// authGoogleHuma handles Google auth mode: opaque backend-issued tokens looked
-// up in the database, with optional group resolution via the groups cache.
-func (s *Server) authGoogleHuma(api huma.API, ctx huma.Context, next func(huma.Context), authHeader string) {
+// authOIDCHuma handles OIDC auth mode (both "google" and "oidc"): opaque
+// backend-issued tokens looked up in the database, with optional group
+// resolution via the groups cache or stored token groups.
+func (s *Server) authOIDCHuma(api huma.API, ctx huma.Context, next func(huma.Context), authHeader string) {
 	if handleUpdateTokenHuma(ctx, next, authHeader) {
 		return
 	}
@@ -344,7 +339,8 @@ func (s *Server) authGoogleHuma(api huma.API, ctx huma.Context, next func(huma.C
 		TokenHash: tokenHash,
 	}
 
-	// Resolve groups if a groups cache is available.
+	// Resolve groups: prefer external resolver (e.g. Google Admin SDK),
+	// fall back to groups stored in the token record.
 	if s.groupsCache != nil {
 		groups, err := s.groupsCache.ResolveGroups(ctx.Context(), tok.UserName)
 		if err != nil {
@@ -353,22 +349,24 @@ func (s *Server) authGoogleHuma(api huma.API, ctx huma.Context, next func(huma.C
 			identity.Groups = groups
 			slog.Debug("groups resolved successfully", "user", tok.UserName, "group_count", len(groups))
 		}
+	} else if len(tok.Groups) > 0 {
+		identity.Groups = tok.Groups
 	}
 
-	slog.Debug("Google authentication successful", "user", identity.UserName)
+	slog.Debug("OIDC authentication successful", "user", identity.UserName)
 	next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
 
-	// Async: touch last_used_at + re-validate against Google if refresh token is stored.
+	// Async: touch last_used_at + re-validate against OIDC provider if refresh token is stored.
 	go func() {
 		if err := s.tokenStore.TouchToken(context.Background(), tokenHash); err != nil {
 			slog.Warn("failed to touch token", "error", err)
 		}
 
-		// Re-validate against Google when the token is past half its TTL.
+		// Re-validate when the token is past half its TTL.
 		// This detects deactivated users without adding latency to every request.
-		if tok.RefreshToken != "" && s.googleClientSecret != "" && s.googleAuth != nil && s.shouldRevalidate(tok) {
-			if err := s.googleAuth.Revalidate(context.Background(), tok.RefreshToken, s.googleClientSecret); err != nil {
-				slog.Warn("google re-validation failed, revoking token",
+		if tok.RefreshToken != "" && s.oidcAuth != nil && s.shouldRevalidate(tok) {
+			if err := s.oidcAuth.Revalidate(context.Background(), tok.RefreshToken); err != nil {
+				slog.Warn("OIDC re-validation failed, revoking token",
 					"user", tok.UserName,
 					"error", err,
 				)

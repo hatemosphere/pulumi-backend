@@ -70,16 +70,19 @@ func TestGoogleAuthE2E(t *testing.T) {
 	}
 	groupsCache := auth.NewGroupsCache(resolver, 5*time.Minute)
 
-	// --- Google authenticator ---
+	// --- Google OIDC authenticator ---
 	var allowedDomains []string
 	if allowedDomain != "" {
 		allowedDomains = []string{allowedDomain}
 	}
-	googleAuth := auth.NewGoogleAuthenticator(auth.GoogleAuthConfig{
+	oidcAuth, err := auth.NewGoogleOIDCAuthenticator(ctx, auth.OIDCConfig{
 		ClientID:       clientID,
 		AllowedDomains: allowedDomains,
 		TokenTTL:       1 * time.Hour,
-	}, groupsCache)
+	}, clientSecret, groupsCache)
+	if err != nil {
+		t.Fatalf("NewGoogleOIDCAuthenticator: %v", err)
+	}
 
 	// --- RBAC ---
 	var groupRoles []auth.GroupRole
@@ -94,7 +97,7 @@ func TestGoogleAuthE2E(t *testing.T) {
 
 	// --- Build backend server ---
 	dataDir := t.TempDir()
-	store, err := storage.NewSQLiteStore(filepath.Join(dataDir, "test.db"))
+	store, err := storage.NewSQLiteStore(filepath.Join(dataDir, "test.db"), storage.SQLiteStoreConfig{})
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
@@ -114,7 +117,7 @@ func TestGoogleAuthE2E(t *testing.T) {
 	srv := api.NewServer(mgr, orgName, "",
 		api.WithAuthMode("google"),
 		api.WithTokenStore(store),
-		api.WithGoogleAuth(googleAuth),
+		api.WithOIDCAuth(oidcAuth),
 		api.WithGroupsCache(groupsCache),
 		api.WithRBAC(rbacResolver),
 	)
@@ -148,14 +151,14 @@ func TestGoogleAuthE2E(t *testing.T) {
 	t.Logf("Got Google ID token (length=%d)", len(idToken))
 
 	// --- Step 2: Exchange ID token for backend token ---
-	resp := doReq(t, baseURL, "POST", "/api/auth/google", "", map[string]string{"idToken": idToken})
+	resp := doReq(t, baseURL, "POST", "/api/auth/token-exchange", "", map[string]string{"idToken": idToken})
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		t.Fatalf("token exchange: status %d, body: %s", resp.StatusCode, body)
 	}
 	var exchangeResp struct {
-		Token     string `json:"token"`
+		Token     string `json:"accessToken"` //nolint:gosec // JSON API field, not a credential
 		UserName  string `json:"userName"`
 		ExpiresAt int64  `json:"expiresAt"`
 	}

@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"google.golang.org/api/idtoken"
 
 	"github.com/hatemosphere/pulumi-backend/internal/api"
 	"github.com/hatemosphere/pulumi-backend/internal/auth"
@@ -475,17 +474,18 @@ func TestPublicRoutes_NoAuth(t *testing.T) {
 	}
 }
 
-// --- Google Auth Mock Infrastructure ---
+// --- OIDC Auth Mock Infrastructure ---
 
-const testGoogleClientID = "test-client-id.apps.googleusercontent.com"
+const testOIDCClientID = "test-client-id.apps.googleusercontent.com"
 
-// testIDTokenValidator is a mock IDTokenValidator that verifies RS256 JWTs
-// signed with a test RSA key and returns an idtoken.Payload.
-type testIDTokenValidator struct {
+// testOIDCValidator is a mock TestOIDCValidator that verifies RS256 JWTs
+// signed with a test RSA key and returns claims as map[string]any.
+type testOIDCValidator struct {
 	publicKey *rsa.PublicKey
+	audience  string
 }
 
-func (v *testIDTokenValidator) Validate(_ context.Context, rawToken, audience string) (*idtoken.Payload, error) {
+func (v *testOIDCValidator) Verify(_ context.Context, rawToken string) (map[string]any, error) {
 	token, err := jwt.Parse(rawToken, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
@@ -501,29 +501,18 @@ func (v *testIDTokenValidator) Validate(_ context.Context, rawToken, audience st
 		return nil, errors.New("invalid token claims")
 	}
 
-	// Check audience like the real validator does.
+	// Check audience like the real OIDC verifier does.
 	aud, _ := claims["aud"].(string)
-	if aud != audience {
-		return nil, fmt.Errorf("audience mismatch: got %q, want %q", aud, audience)
+	if aud != v.audience {
+		return nil, fmt.Errorf("audience mismatch: got %q, want %q", aud, v.audience)
 	}
 
-	// Build idtoken.Payload from JWT claims.
-	payload := &idtoken.Payload{
-		Audience: aud,
-		Claims:   make(map[string]any),
+	// Convert to map[string]any.
+	result := make(map[string]any, len(claims))
+	for k, val := range claims {
+		result[k] = val
 	}
-	if sub, ok := claims["sub"].(string); ok {
-		payload.Subject = sub
-	}
-	if iss, ok := claims["iss"].(string); ok {
-		payload.Issuer = iss
-	}
-	// Copy all claims.
-	for k, v := range claims {
-		payload.Claims[k] = v
-	}
-
-	return payload, nil
+	return result, nil
 }
 
 // testGroupsResolver is a mock GroupsResolverIface that returns pre-configured
@@ -539,15 +528,15 @@ func (r *testGroupsResolver) ResolveGroups(_ context.Context, email string) ([]s
 	return nil, nil
 }
 
-// googleTestSetup holds the test RSA key pair and backend for Google auth tests.
-type googleTestSetup struct {
+// oidcTestSetup holds the test RSA key pair and backend for OIDC auth tests.
+type oidcTestSetup struct {
 	tb         *testBackend
 	privateKey *rsa.PrivateKey
 }
 
-// newGoogleBackend creates a backend in Google auth mode with a mock ID token
-// validator and optional groups/RBAC configuration.
-func newGoogleBackend(t *testing.T, rbacConfig *auth.RBACConfig, groups map[string][]string, tokenTTL time.Duration, extraOpts ...api.ServerOption) *googleTestSetup {
+// newOIDCBackend creates a backend in OIDC auth mode (Google flavor) with a mock
+// ID token validator and optional groups/RBAC configuration.
+func newOIDCBackend(t *testing.T, rbacConfig *auth.RBACConfig, groups map[string][]string, tokenTTL time.Duration, extraOpts ...api.ServerOption) *oidcTestSetup {
 	t.Helper()
 
 	// Generate test RSA key pair.
@@ -556,16 +545,17 @@ func newGoogleBackend(t *testing.T, rbacConfig *auth.RBACConfig, groups map[stri
 		t.Fatalf("generate RSA key: %v", err)
 	}
 
-	validator := &testIDTokenValidator{publicKey: &privateKey.PublicKey}
+	validator := &testOIDCValidator{publicKey: &privateKey.PublicKey, audience: testOIDCClientID}
 
 	if tokenTTL == 0 {
 		tokenTTL = time.Hour
 	}
 
-	googleConfig := auth.GoogleAuthConfig{
-		ClientID:       testGoogleClientID,
+	oidcConfig := auth.OIDCConfig{
+		ClientID:       testOIDCClientID,
 		AllowedDomains: []string{"example.com"},
 		TokenTTL:       tokenTTL,
+		ProviderName:   "Google",
 	}
 
 	// Set up groups cache if groups are configured.
@@ -575,7 +565,7 @@ func newGoogleBackend(t *testing.T, rbacConfig *auth.RBACConfig, groups map[stri
 		groupsCache = auth.NewGroupsCache(resolver, 5*time.Minute)
 	}
 
-	googleAuth := auth.NewGoogleAuthenticatorWithValidator(googleConfig, groupsCache, validator, nil)
+	oidcAuth := auth.NewTestOIDCAuthenticator(oidcConfig, groupsCache, validator, nil)
 
 	// Build the backend manually (similar to startBackendWithOpts) so we can
 	// pass the same store as both the engine's store and the token store.
@@ -599,7 +589,7 @@ func newGoogleBackend(t *testing.T, rbacConfig *auth.RBACConfig, groups map[stri
 
 	opts := []api.ServerOption{
 		api.WithAuthMode("google"),
-		api.WithGoogleAuth(googleAuth),
+		api.WithOIDCAuth(oidcAuth),
 		api.WithTokenStore(store),
 	}
 	if groupsCache != nil {
@@ -638,7 +628,7 @@ func newGoogleBackend(t *testing.T, rbacConfig *auth.RBACConfig, groups map[stri
 		resp, err := http.Get(tb.URL + "/")
 		if err == nil {
 			resp.Body.Close()
-			return &googleTestSetup{tb: tb, privateKey: privateKey}
+			return &oidcTestSetup{tb: tb, privateKey: privateKey}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -646,10 +636,10 @@ func newGoogleBackend(t *testing.T, rbacConfig *auth.RBACConfig, groups map[stri
 	return nil
 }
 
-// newGoogleBackendWithRefresher is like newGoogleBackend but also injects a
-// custom TokenRefresher and sets the client secret so that refresh re-validation
-// is active in the auth middleware.
-func newGoogleBackendWithRefresher(t *testing.T, rbacConfig *auth.RBACConfig, groups map[string][]string, tokenTTL time.Duration, refresher auth.TokenRefresher) *googleTestSetup {
+// newOIDCBackendWithRefresher is like newOIDCBackend but also injects a
+// custom TestOIDCRefresher so that refresh re-validation is active in the
+// auth middleware.
+func newOIDCBackendWithRefresher(t *testing.T, rbacConfig *auth.RBACConfig, groups map[string][]string, tokenTTL time.Duration, refresher auth.TestOIDCRefresher) *oidcTestSetup {
 	t.Helper()
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -657,15 +647,16 @@ func newGoogleBackendWithRefresher(t *testing.T, rbacConfig *auth.RBACConfig, gr
 		t.Fatalf("generate RSA key: %v", err)
 	}
 
-	validator := &testIDTokenValidator{publicKey: &privateKey.PublicKey}
+	validator := &testOIDCValidator{publicKey: &privateKey.PublicKey, audience: testOIDCClientID}
 	if tokenTTL == 0 {
 		tokenTTL = time.Hour
 	}
 
-	googleConfig := auth.GoogleAuthConfig{
-		ClientID:       testGoogleClientID,
+	oidcConfig := auth.OIDCConfig{
+		ClientID:       testOIDCClientID,
 		AllowedDomains: []string{"example.com"},
 		TokenTTL:       tokenTTL,
+		ProviderName:   "Google",
 	}
 
 	var groupsCache *auth.GroupsCache
@@ -674,7 +665,7 @@ func newGoogleBackendWithRefresher(t *testing.T, rbacConfig *auth.RBACConfig, gr
 		groupsCache = auth.NewGroupsCache(resolver, 5*time.Minute)
 	}
 
-	googleAuth := auth.NewGoogleAuthenticatorWithValidator(googleConfig, groupsCache, validator, refresher)
+	oidcAuth := auth.NewTestOIDCAuthenticator(oidcConfig, groupsCache, validator, refresher)
 
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "test.db")
@@ -696,9 +687,8 @@ func newGoogleBackendWithRefresher(t *testing.T, rbacConfig *auth.RBACConfig, gr
 
 	opts := []api.ServerOption{
 		api.WithAuthMode("google"),
-		api.WithGoogleAuth(googleAuth),
+		api.WithOIDCAuth(oidcAuth),
 		api.WithTokenStore(store),
-		api.WithGoogleClientSecret("test-client-secret"),
 	}
 	if groupsCache != nil {
 		opts = append(opts, api.WithGroupsCache(groupsCache))
@@ -735,7 +725,7 @@ func newGoogleBackendWithRefresher(t *testing.T, rbacConfig *auth.RBACConfig, gr
 		resp, err := http.Get(tb.URL + "/")
 		if err == nil {
 			resp.Body.Close()
-			return &googleTestSetup{tb: tb, privateKey: privateKey}
+			return &oidcTestSetup{tb: tb, privateKey: privateKey}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -743,11 +733,11 @@ func newGoogleBackendWithRefresher(t *testing.T, rbacConfig *auth.RBACConfig, gr
 	return nil
 }
 
-// mintGoogleIDToken creates a signed RS256 JWT that mimics a Google ID token.
-func mintGoogleIDToken(t *testing.T, key *rsa.PrivateKey, claims jwt.MapClaims) string {
+// mintIDToken creates a signed RS256 JWT that mimics an OIDC ID token.
+func mintIDToken(t *testing.T, key *rsa.PrivateKey, claims jwt.MapClaims) string {
 	t.Helper()
 	if _, ok := claims["aud"]; !ok {
-		claims["aud"] = testGoogleClientID
+		claims["aud"] = testOIDCClientID
 	}
 	if _, ok := claims["exp"]; !ok {
 		claims["exp"] = jwt.NewNumericDate(time.Now().Add(time.Hour))
@@ -758,17 +748,17 @@ func mintGoogleIDToken(t *testing.T, key *rsa.PrivateKey, claims jwt.MapClaims) 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	s, err := token.SignedString(key)
 	if err != nil {
-		t.Fatalf("sign Google ID token: %v", err)
+		t.Fatalf("sign ID token: %v", err)
 	}
 	return s
 }
 
-// exchangeGoogleToken calls POST /api/auth/google to exchange an ID token for
+// exchangeToken calls POST /api/auth/token-exchange to exchange an ID token for
 // a backend access token.
-func exchangeGoogleToken(t *testing.T, tb *testBackend, idToken string) (int, map[string]any) {
+func exchangeToken(t *testing.T, tb *testBackend, idToken string) (int, map[string]any) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"idToken": idToken})
-	resp, err := http.Post(tb.URL+"/api/auth/google", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(tb.URL+"/api/auth/token-exchange", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("exchange request failed: %v", err)
 	}
@@ -779,19 +769,19 @@ func exchangeGoogleToken(t *testing.T, tb *testBackend, idToken string) (int, ma
 	return resp.StatusCode, result
 }
 
-// --- Google Auth Integration Tests ---
+// --- OIDC Auth Integration Tests ---
 
-func TestGoogleAuth_TokenExchange_200(t *testing.T) {
-	gs := newGoogleBackend(t, nil, nil, 0)
+func TestOIDCAuth_TokenExchange_200(t *testing.T) {
+	gs := newOIDCBackend(t, nil, nil, 0)
 
-	idToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	idToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub":            "alice@example.com",
 		"email":          "alice@example.com",
 		"email_verified": true,
 		"hd":             "example.com",
 	})
 
-	status, result := exchangeGoogleToken(t, gs.tb, idToken)
+	status, result := exchangeToken(t, gs.tb, idToken)
 	if status != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %v", status, result)
 	}
@@ -803,19 +793,19 @@ func TestGoogleAuth_TokenExchange_200(t *testing.T) {
 	}
 }
 
-func TestGoogleAuth_InvalidToken_401(t *testing.T) {
-	gs := newGoogleBackend(t, nil, nil, 0)
+func TestOIDCAuth_InvalidToken_401(t *testing.T) {
+	gs := newOIDCBackend(t, nil, nil, 0)
 
-	status, _ := exchangeGoogleToken(t, gs.tb, "not-a-valid-jwt")
+	status, _ := exchangeToken(t, gs.tb, "not-a-valid-jwt")
 	if status != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", status)
 	}
 }
 
-func TestGoogleAuth_WrongAudience_401(t *testing.T) {
-	gs := newGoogleBackend(t, nil, nil, 0)
+func TestOIDCAuth_WrongAudience_401(t *testing.T) {
+	gs := newOIDCBackend(t, nil, nil, 0)
 
-	idToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	idToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub":            "alice@example.com",
 		"email":          "alice@example.com",
 		"email_verified": true,
@@ -823,64 +813,64 @@ func TestGoogleAuth_WrongAudience_401(t *testing.T) {
 		"aud":            "wrong-client-id",
 	})
 
-	status, _ := exchangeGoogleToken(t, gs.tb, idToken)
+	status, _ := exchangeToken(t, gs.tb, idToken)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", status)
 	}
 }
 
-func TestGoogleAuth_WrongDomain_401(t *testing.T) {
-	gs := newGoogleBackend(t, nil, nil, 0)
+func TestOIDCAuth_WrongDomain_401(t *testing.T) {
+	gs := newOIDCBackend(t, nil, nil, 0)
 
-	idToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	idToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub":            "alice@evil.com",
 		"email":          "alice@evil.com",
 		"email_verified": true,
 		"hd":             "evil.com",
 	})
 
-	status, _ := exchangeGoogleToken(t, gs.tb, idToken)
+	status, _ := exchangeToken(t, gs.tb, idToken)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", status)
 	}
 }
 
-func TestGoogleAuth_MissingEmail_401(t *testing.T) {
-	gs := newGoogleBackend(t, nil, nil, 0)
+func TestOIDCAuth_MissingEmail_401(t *testing.T) {
+	gs := newOIDCBackend(t, nil, nil, 0)
 
-	idToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	idToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub":            "no-email-user",
 		"email_verified": true,
 		"hd":             "example.com",
 	})
 
-	status, _ := exchangeGoogleToken(t, gs.tb, idToken)
+	status, _ := exchangeToken(t, gs.tb, idToken)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", status)
 	}
 }
 
-func TestGoogleAuth_EmailNotVerified_401(t *testing.T) {
-	gs := newGoogleBackend(t, nil, nil, 0)
+func TestOIDCAuth_EmailNotVerified_401(t *testing.T) {
+	gs := newOIDCBackend(t, nil, nil, 0)
 
-	idToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	idToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub":            "alice@example.com",
 		"email":          "alice@example.com",
 		"email_verified": false,
 		"hd":             "example.com",
 	})
 
-	status, _ := exchangeGoogleToken(t, gs.tb, idToken)
+	status, _ := exchangeToken(t, gs.tb, idToken)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", status)
 	}
 }
 
-func TestGoogleAuth_ExpiredBackendToken_401(t *testing.T) {
+func TestOIDCAuth_ExpiredBackendToken_401(t *testing.T) {
 	// Use a short TTL so the backend token expires quickly.
-	gs := newGoogleBackend(t, nil, nil, 1*time.Second)
+	gs := newOIDCBackend(t, nil, nil, 1*time.Second)
 
-	idToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	idToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub":            "alice@example.com",
 		"email":          "alice@example.com",
 		"email_verified": true,
@@ -888,7 +878,7 @@ func TestGoogleAuth_ExpiredBackendToken_401(t *testing.T) {
 	})
 
 	// Exchange should succeed.
-	status, result := exchangeGoogleToken(t, gs.tb, idToken)
+	status, result := exchangeToken(t, gs.tb, idToken)
 	if status != http.StatusOK {
 		t.Fatalf("exchange: expected 200, got %d", status)
 	}
@@ -912,17 +902,17 @@ func TestGoogleAuth_ExpiredBackendToken_401(t *testing.T) {
 	}
 }
 
-func TestGoogleAuth_AuthenticatedRequest_200(t *testing.T) {
-	gs := newGoogleBackend(t, nil, nil, 0)
+func TestOIDCAuth_AuthenticatedRequest_200(t *testing.T) {
+	gs := newOIDCBackend(t, nil, nil, 0)
 
-	idToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	idToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub":            "alice@example.com",
 		"email":          "alice@example.com",
 		"email_verified": true,
 		"hd":             "example.com",
 	})
 
-	status, result := exchangeGoogleToken(t, gs.tb, idToken)
+	status, result := exchangeToken(t, gs.tb, idToken)
 	if status != http.StatusOK {
 		t.Fatalf("exchange: expected 200, got %d", status)
 	}
@@ -938,7 +928,7 @@ func TestGoogleAuth_AuthenticatedRequest_200(t *testing.T) {
 	}
 }
 
-func TestGoogleAuth_RBAC_GroupPermissions(t *testing.T) {
+func TestOIDCAuth_RBAC_GroupPermissions(t *testing.T) {
 	rbacConfig := &auth.RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []auth.GroupRole{
@@ -950,16 +940,16 @@ func TestGoogleAuth_RBAC_GroupPermissions(t *testing.T) {
 		"admin@example.com":  {"admins@example.com"},
 		"reader@example.com": {"readers@example.com"},
 	}
-	gs := newGoogleBackend(t, rbacConfig, groups, 0)
+	gs := newOIDCBackend(t, rbacConfig, groups, 0)
 
 	// Exchange admin token.
-	adminIDToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	adminIDToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub":            "admin@example.com",
 		"email":          "admin@example.com",
 		"email_verified": true,
 		"hd":             "example.com",
 	})
-	status, adminResult := exchangeGoogleToken(t, gs.tb, adminIDToken)
+	status, adminResult := exchangeToken(t, gs.tb, adminIDToken)
 	if status != http.StatusOK {
 		t.Fatalf("admin exchange: expected 200, got %d", status)
 	}
@@ -969,13 +959,13 @@ func TestGoogleAuth_RBAC_GroupPermissions(t *testing.T) {
 	createTestStack(t, gs.tb, adminToken, "organization", "test-project", "dev")
 
 	// Exchange reader token.
-	readerIDToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	readerIDToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub":            "reader@example.com",
 		"email":          "reader@example.com",
 		"email_verified": true,
 		"hd":             "example.com",
 	})
-	status, readerResult := exchangeGoogleToken(t, gs.tb, readerIDToken)
+	status, readerResult := exchangeToken(t, gs.tb, readerIDToken)
 	if status != http.StatusOK {
 		t.Fatalf("reader exchange: expected 200, got %d", status)
 	}
@@ -1009,7 +999,7 @@ func TestGoogleAuth_RBAC_GroupPermissions(t *testing.T) {
 	}
 }
 
-func TestGoogleAuth_NoGroupsCache_NoGroups(t *testing.T) {
+func TestOIDCAuth_NoGroupsCache_NoGroups(t *testing.T) {
 	// When no groups cache is configured, RBAC should still work with
 	// just the default permission (no groups to match against).
 	rbacConfig := &auth.RBACConfig{
@@ -1019,15 +1009,15 @@ func TestGoogleAuth_NoGroupsCache_NoGroups(t *testing.T) {
 		},
 	}
 	// Pass nil groups = no groups cache.
-	gs := newGoogleBackend(t, rbacConfig, nil, 0)
+	gs := newOIDCBackend(t, rbacConfig, nil, 0)
 
-	idToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	idToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub":            "alice@example.com",
 		"email":          "alice@example.com",
 		"email_verified": true,
 		"hd":             "example.com",
 	})
-	status, result := exchangeGoogleToken(t, gs.tb, idToken)
+	status, result := exchangeToken(t, gs.tb, idToken)
 	if status != http.StatusOK {
 		t.Fatalf("exchange: expected 200, got %d", status)
 	}
@@ -1044,10 +1034,10 @@ func TestGoogleAuth_NoGroupsCache_NoGroups(t *testing.T) {
 
 // --- Browser/CLI Login Page Tests ---
 
-func TestGoogleAuth_LoginPage_Available(t *testing.T) {
-	gs := newGoogleBackend(t, nil, nil, 0, api.WithGoogleClientSecret("test-secret"))
+func TestOIDCAuth_LoginPage_Available(t *testing.T) {
+	gs := newOIDCBackend(t, nil, nil, 0)
 
-	// GET /login should return the login page HTML, not the health check JSON.
+	// GET /login should return the login page HTML.
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Get(gs.tb.URL + "/login")
 	if err != nil {
@@ -1062,7 +1052,7 @@ func TestGoogleAuth_LoginPage_Available(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	// Should be HTML with Google sign-in, not JSON health check.
+	// Should be HTML with SSO sign-in, not JSON health check.
 	if !strings.Contains(bodyStr, "Sign in with Google") {
 		t.Fatalf("GET /login: expected login page HTML with 'Sign in with Google', got: %s", bodyStr[:min(200, len(bodyStr))])
 	}
@@ -1071,10 +1061,10 @@ func TestGoogleAuth_LoginPage_Available(t *testing.T) {
 	}
 }
 
-func TestGoogleAuth_CLILogin_Redirects(t *testing.T) {
-	gs := newGoogleBackend(t, nil, nil, 0, api.WithGoogleClientSecret("test-secret"))
+func TestOIDCAuth_CLILogin_Redirects(t *testing.T) {
+	gs := newOIDCBackend(t, nil, nil, 0)
 
-	// GET /cli-login with proper params should redirect to Google OAuth.
+	// GET /cli-login with proper params should redirect to OIDC provider.
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Get(gs.tb.URL + "/cli-login?cliSessionPort=12345&cliSessionNonce=testnonce")
 	if err != nil {
@@ -1096,11 +1086,11 @@ func TestGoogleAuth_CLILogin_Redirects(t *testing.T) {
 	}
 }
 
-func TestGoogleAuth_LoginPage_NotAvailableWithoutSecret(t *testing.T) {
-	// Without client secret, /login should return the health check (no login routes registered).
-	gs := newGoogleBackend(t, nil, nil, 0)
+func TestAuth_LoginPage_NotAvailableInJWTMode(t *testing.T) {
+	// In JWT mode (no OIDC auth), /login should not return a login page.
+	tb := newJWTBackend(t, nil)
 
-	resp, err := http.Get(gs.tb.URL + "/login")
+	resp, err := http.Get(tb.URL + "/login")
 	if err != nil {
 		t.Fatalf("GET /login: %v", err)
 	}
@@ -1109,15 +1099,15 @@ func TestGoogleAuth_LoginPage_NotAvailableWithoutSecret(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	bodyStr := string(body)
 
-	// Should get the health check or 404, not the login page.
-	if strings.Contains(bodyStr, "Sign in with Google") {
-		t.Fatal("GET /login: login page should not be available without client secret")
+	// Should NOT be the login page.
+	if strings.Contains(bodyStr, "Sign in with") {
+		t.Fatal("GET /login: login page should not be available in JWT mode")
 	}
 }
 
 // --- Admin Token Management Tests ---
 
-func TestGoogleAuth_AdminListTokens(t *testing.T) {
+func TestOIDCAuth_AdminListTokens(t *testing.T) {
 	rbacConfig := &auth.RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []auth.GroupRole{
@@ -1128,25 +1118,25 @@ func TestGoogleAuth_AdminListTokens(t *testing.T) {
 		"admin@example.com": {"admins@example.com"},
 		"user@example.com":  {},
 	}
-	gs := newGoogleBackend(t, rbacConfig, groups, 0)
+	gs := newOIDCBackend(t, rbacConfig, groups, 0)
 
 	// Exchange admin token.
-	adminIDToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	adminIDToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub": "admin@example.com", "email": "admin@example.com",
 		"email_verified": true, "hd": "example.com",
 	})
-	status, adminResult := exchangeGoogleToken(t, gs.tb, adminIDToken)
+	status, adminResult := exchangeToken(t, gs.tb, adminIDToken)
 	if status != http.StatusOK {
 		t.Fatalf("admin exchange: expected 200, got %d", status)
 	}
 	adminToken, _ := adminResult["accessToken"].(string)
 
 	// Exchange user token.
-	userIDToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	userIDToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub": "user@example.com", "email": "user@example.com",
 		"email_verified": true, "hd": "example.com",
 	})
-	status, _ = exchangeGoogleToken(t, gs.tb, userIDToken)
+	status, _ = exchangeToken(t, gs.tb, userIDToken)
 	if status != http.StatusOK {
 		t.Fatalf("user exchange: expected 200, got %d", status)
 	}
@@ -1171,12 +1161,12 @@ func TestGoogleAuth_AdminListTokens(t *testing.T) {
 	if len(listResp.Tokens) != 1 {
 		t.Fatalf("expected 1 token, got %d", len(listResp.Tokens))
 	}
-	if listResp.Tokens[0].Description != "google-auth" {
-		t.Fatalf("expected description 'google-auth', got %q", listResp.Tokens[0].Description)
+	if listResp.Tokens[0].Description != "oidc-token-exchange" {
+		t.Fatalf("expected description 'oidc-token-exchange', got %q", listResp.Tokens[0].Description)
 	}
 }
 
-func TestGoogleAuth_AdminRevokeTokens(t *testing.T) {
+func TestOIDCAuth_AdminRevokeTokens(t *testing.T) {
 	rbacConfig := &auth.RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []auth.GroupRole{
@@ -1187,24 +1177,24 @@ func TestGoogleAuth_AdminRevokeTokens(t *testing.T) {
 		"admin@example.com": {"admins@example.com"},
 		"user@example.com":  {},
 	}
-	gs := newGoogleBackend(t, rbacConfig, groups, 0)
+	gs := newOIDCBackend(t, rbacConfig, groups, 0)
 
 	// Exchange admin + user tokens.
-	adminIDToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	adminIDToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub": "admin@example.com", "email": "admin@example.com",
 		"email_verified": true, "hd": "example.com",
 	})
-	status, adminResult := exchangeGoogleToken(t, gs.tb, adminIDToken)
+	status, adminResult := exchangeToken(t, gs.tb, adminIDToken)
 	if status != http.StatusOK {
 		t.Fatalf("admin exchange: expected 200, got %d", status)
 	}
 	adminToken, _ := adminResult["accessToken"].(string)
 
-	userIDToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	userIDToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub": "user@example.com", "email": "user@example.com",
 		"email_verified": true, "hd": "example.com",
 	})
-	status, userResult := exchangeGoogleToken(t, gs.tb, userIDToken)
+	status, userResult := exchangeToken(t, gs.tb, userIDToken)
 	if status != http.StatusOK {
 		t.Fatalf("user exchange: expected 200, got %d", status)
 	}
@@ -1250,7 +1240,7 @@ func TestGoogleAuth_AdminRevokeTokens(t *testing.T) {
 	}
 }
 
-func TestGoogleAuth_AdminForbiddenForNonAdmin(t *testing.T) {
+func TestOIDCAuth_AdminForbiddenForNonAdmin(t *testing.T) {
 	rbacConfig := &auth.RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []auth.GroupRole{
@@ -1260,13 +1250,13 @@ func TestGoogleAuth_AdminForbiddenForNonAdmin(t *testing.T) {
 	groups := map[string][]string{
 		"user@example.com": {},
 	}
-	gs := newGoogleBackend(t, rbacConfig, groups, 0)
+	gs := newOIDCBackend(t, rbacConfig, groups, 0)
 
-	userIDToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	userIDToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub": "user@example.com", "email": "user@example.com",
 		"email_verified": true, "hd": "example.com",
 	})
-	status, userResult := exchangeGoogleToken(t, gs.tb, userIDToken)
+	status, userResult := exchangeToken(t, gs.tb, userIDToken)
 	if status != http.StatusOK {
 		t.Fatalf("user exchange: expected 200, got %d", status)
 	}
@@ -1289,20 +1279,20 @@ func TestGoogleAuth_AdminForbiddenForNonAdmin(t *testing.T) {
 
 // --- Refresh Token Re-validation Tests ---
 
-// testTokenRefresher is a mock TokenRefresher for testing re-validation behavior.
-type testTokenRefresher struct {
+// testOIDCRefresher is a mock TestOIDCRefresher for testing re-validation behavior.
+type testOIDCRefresher struct {
 	shouldFail bool
 	failErr    error
 	// signKey is used to mint a valid JWT when refresh succeeds (so the validator accepts it).
 	signKey *rsa.PrivateKey
 }
 
-func (r *testTokenRefresher) RefreshToken(_ context.Context, _, _, _ string) (string, error) {
+func (r *testOIDCRefresher) Refresh(_ context.Context, _ string) (string, error) {
 	if r.shouldFail {
 		if r.failErr != nil {
 			return "", r.failErr
 		}
-		return "", errors.New("google rejected refresh token (status 401): user deactivated")
+		return "", errors.New("OIDC provider rejected refresh token: user deactivated")
 	}
 	// Return a signed JWT that the test validator will accept.
 	claims := jwt.MapClaims{
@@ -1310,7 +1300,7 @@ func (r *testTokenRefresher) RefreshToken(_ context.Context, _, _, _ string) (st
 		"email":          "alice@example.com",
 		"email_verified": true,
 		"hd":             "example.com",
-		"aud":            testGoogleClientID,
+		"aud":            testOIDCClientID,
 		"exp":            jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		"iat":            jwt.NewNumericDate(time.Now()),
 	}
@@ -1322,22 +1312,22 @@ func (r *testTokenRefresher) RefreshToken(_ context.Context, _, _, _ string) (st
 	return s, nil
 }
 
-func TestGoogleAuth_RefreshTokenRevalidation_Revokes(t *testing.T) {
+func TestOIDCAuth_RefreshTokenRevalidation_Revokes(t *testing.T) {
 	// Create a backend where the refresh token re-validation will fail,
-	// simulating a deactivated Google Workspace user.
+	// simulating a deactivated user.
 	// Use 6s TTL — long enough that the token doesn't expire naturally during the test,
 	// but the revocation happens due to failed re-validation.
-	refresher := &testTokenRefresher{shouldFail: true}
+	refresher := &testOIDCRefresher{shouldFail: true}
 
-	gs := newGoogleBackendWithRefresher(t, nil, nil, 6*time.Second, refresher)
+	gs := newOIDCBackendWithRefresher(t, nil, nil, 6*time.Second, refresher)
 	refresher.signKey = gs.privateKey
 
-	idToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	idToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub": "alice@example.com", "email": "alice@example.com",
 		"email_verified": true, "hd": "example.com",
 	})
 
-	status, result := exchangeGoogleToken(t, gs.tb, idToken)
+	status, result := exchangeToken(t, gs.tb, idToken)
 	if status != http.StatusOK {
 		t.Fatalf("exchange: expected 200, got %d", status)
 	}
@@ -1374,20 +1364,20 @@ func TestGoogleAuth_RefreshTokenRevalidation_Revokes(t *testing.T) {
 	}
 }
 
-func TestGoogleAuth_RefreshTokenRevalidation_Passes(t *testing.T) {
+func TestOIDCAuth_RefreshTokenRevalidation_Passes(t *testing.T) {
 	// Create a backend where refresh token re-validation succeeds.
 	// Use a longer TTL (6s) so the token doesn't expire during the test.
-	refresher := &testTokenRefresher{shouldFail: false}
+	refresher := &testOIDCRefresher{shouldFail: false}
 
-	gs := newGoogleBackendWithRefresher(t, nil, nil, 6*time.Second, refresher)
+	gs := newOIDCBackendWithRefresher(t, nil, nil, 6*time.Second, refresher)
 	refresher.signKey = gs.privateKey
 
-	idToken := mintGoogleIDToken(t, gs.privateKey, jwt.MapClaims{
+	idToken := mintIDToken(t, gs.privateKey, jwt.MapClaims{
 		"sub": "alice@example.com", "email": "alice@example.com",
 		"email_verified": true, "hd": "example.com",
 	})
 
-	status, result := exchangeGoogleToken(t, gs.tb, idToken)
+	status, result := exchangeToken(t, gs.tb, idToken)
 	if status != http.StatusOK {
 		t.Fatalf("exchange: expected 200, got %d", status)
 	}

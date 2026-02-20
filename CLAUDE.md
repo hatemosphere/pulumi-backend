@@ -10,7 +10,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 ```
 
 - **api/** — huma v2 typed handlers, auto-generated OpenAPI spec, auth + RBAC middleware
-- **auth/** — Authentication (single-tenant, Google OIDC, JWT), RBAC resolver, groups cache
+- **auth/** — Authentication (single-tenant, Google OIDC, generic OIDC, JWT), RBAC resolver, groups cache
 - **engine/** — Business logic: stack locks, LRU cache, delta/journal replay, AES-256-GCM secrets
 - **storage/** — `Store` interface + SQLite impl. Deployments stored gzip-compressed.
 - **config/** — Flag + env var parsing (`PULUMI_BACKEND_*` prefix)
@@ -29,7 +29,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | `internal/auth/rbac_config.go` | RBAC YAML config + Permission types |
 | `internal/auth/identity.go` | UserIdentity type + context helpers |
 | `internal/auth/groups_cache.go` | TTL + singleflight cache for group lookups |
-| `internal/auth/google.go` | Google OIDC authenticator + IDTokenValidator/TokenRefresher interfaces + Revalidate |
+| `internal/auth/oidc.go` | Generic OIDC authenticator (OIDCAuthenticator interface), Google specialization, test mock constructors |
 | `internal/api/login.go` | Browser + CLI login (GET /login, /login/callback, /cli-login), refresh token capture |
 | `internal/engine/manager.go` | Core logic |
 | `internal/engine/journal.go` | Journal replay algorithm |
@@ -67,10 +67,11 @@ golangci-lint run ./...                                   # lint
 - **RawBody caution**: huma pools request body buffers. Any `RawBody []byte` stored beyond handler lifetime must be copied (`make + copy`).
 - **Middleware architecture**: HTTP-level (realIP, recoverer, requestLogger, gzipDecompressor) + huma-level (metricsHumaMiddleware, authHumaMiddleware, rbacMiddleware). Two huma API instances on the same mux: publicAPI (no auth) and api (auth + RBAC).
 - SQLite: pure Go via `modernc.org/sqlite`, WAL mode, `MaxOpenConns=1`
-- Auth: three modes — `single-tenant` (any token = admin), `google` (OIDC + backend tokens + groups + browser login), `jwt` (stateless, claims-based)
-- Google auth testability: `IDTokenValidator` + `TokenRefresher` interfaces in google.go allow test injection of mocks
-- Browser login: `GET /login` (manual), `GET /cli-login` (automatic via `PULUMI_CONSOLE_DOMAIN`). Requires `-google-client-secret`. Routes registered on raw mux, not huma (serves HTML).
-- Google refresh token re-validation: browser/CLI login captures Google's refresh token, stored in `tokens` table. On each auth request past half TTL, async re-validation against Google detects deactivated users (Dex pattern).
+- Auth: four modes — `single-tenant` (any token = admin), `google` (Google OIDC via go-oidc/v3 + backend tokens + groups + browser login), `oidc` (generic OIDC provider), `jwt` (stateless, claims-based)
+- OIDC architecture: `OIDCAuthenticator` interface in `oidc.go`, Google mode is a specialization (`NewGoogleOIDCAuthenticator`). `TestOIDCValidator` + `TestOIDCRefresher` interfaces for test mock injection via `NewTestOIDCAuthenticator`.
+- Browser login: `GET /login` (manual), `GET /cli-login` (automatic via `PULUMI_CONSOLE_DOMAIN`). Registered when `oidcAuth != nil`. Routes on raw mux, not huma (serves HTML).
+- OIDC refresh token re-validation: browser/CLI login captures provider's refresh token, stored in `tokens` table. On each auth request past half TTL, async re-validation via `oauth2.TokenSource` detects deactivated users (Dex pattern).
+- OIDC groups: stored in DB for generic OIDC providers (from token claims at login), resolved live via Google Admin SDK for Google mode.
 - Admin endpoints: `requireAdmin()` helper checks `IsAdmin` (single-tenant) OR RBAC admin permission (Google/JWT). Token management: `GET/DELETE /api/admin/tokens/{userName}`.
 - RBAC: group-based with stack-level policy overrides. Permission levels: `none < read < write < admin`. Admin RBAC role grants access to admin endpoints too.
 - Secrets: per-stack AES-256-GCM keys wrapped by master key (local) or GCP KMS

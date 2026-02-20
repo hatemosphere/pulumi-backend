@@ -19,7 +19,7 @@ This backend speaks the same HTTP protocol as Pulumi Cloud, so the CLI uses its 
 | **Secrets** | Client-side (passphrase or KMS) | Server-side AES-256-GCM with optional GCP KMS key wrapping |
 | **State compression** | None | Gzip-compressed deployment storage in SQLite |
 | **Listing/querying** | Walk the bucket listing files | SQL queries with pagination |
-| **Auth** | None | Single-tenant, Google OIDC, or JWT with RBAC |
+| **Auth** | None | Single-tenant, Google OIDC, generic OIDC, or JWT with RBAC |
 
 ## Usage
 
@@ -34,11 +34,11 @@ Then point the CLI at it:
 pulumi login http://localhost:8080
 ```
 
-With Google OIDC auth, set `PULUMI_CONSOLE_DOMAIN` for automatic browser-based login (no token copy-paste):
+With OIDC auth (Google, Okta, Entra ID, Keycloak, etc.), set `PULUMI_CONSOLE_DOMAIN` for automatic browser-based login (no token copy-paste):
 
 ```bash
 export PULUMI_CONSOLE_DOMAIN=localhost:8080
-pulumi login http://localhost:8080  # opens browser for Google sign-in
+pulumi login http://localhost:8080  # opens browser for OIDC sign-in
 ```
 
 ### Configuration
@@ -83,14 +83,15 @@ If no master key is provided, one is auto-generated and printed to stderr. Persi
 
 #### Authentication
 
-Three auth modes: `single-tenant` (default), `google`, and `jwt`.
+Four auth modes: `single-tenant` (default), `google`, `oidc`, and `jwt`.
 
 | Flag | Env | Default | Description |
 |---|---|---|---|
-| `-auth-mode` | `PULUMI_BACKEND_AUTH_MODE` | `single-tenant` | `single-tenant`, `google`, or `jwt` |
+| `-auth-mode` | `PULUMI_BACKEND_AUTH_MODE` | `single-tenant` | `single-tenant`, `google`, `oidc`, or `jwt` |
 | `-rbac-config` | `PULUMI_BACKEND_RBAC_CONFIG` | | Path to RBAC config YAML (disabled if not set) |
 
 - **[Google OIDC setup guide](docs/auth-google.md)** — OAuth2, Workspace groups, keyless DWD, GKE Workload Identity
+- **[Generic OIDC setup guide](docs/auth-oidc.md)** — Okta, Entra ID, Keycloak, any OIDC provider
 - **[JWT setup guide](docs/auth-jwt.md)** — HMAC/RSA/ECDSA, Dex, Keycloak integration
 - **[RBAC configuration](docs/rbac.md)** — Group roles, stack policies, permission levels
 
@@ -106,11 +107,11 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 - Batch encrypt/decrypt
 - Update history with pagination
 - User/org endpoints
-- Authentication (single-tenant, Google OIDC, JWT)
-- Browser login page (`GET /login`) and automatic CLI login (`GET /cli-login`) with Google OAuth2
+- Authentication (single-tenant, Google OIDC, generic OIDC, JWT)
+- Browser login page (`GET /login`) and automatic CLI login (`GET /cli-login`) with any OIDC provider
 - RBAC (group-based, with stack-level policy overrides)
 - Admin token management (`GET/DELETE /api/admin/tokens/{userName}`)
-- Google refresh token re-validation (detects deactivated users mid-session)
+- OIDC refresh token re-validation (detects deactivated users mid-session)
 - Prometheus metrics (`/metrics`)
 - OpenAPI 3.1 spec (`GET /api/openapi`)
 - Database backup (`POST /api/admin/backup`)

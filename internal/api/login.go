@@ -3,11 +3,8 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"html/template"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -23,13 +20,13 @@ func (s *Server) registerLoginPage(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", s.handleLoginPage)
 	mux.HandleFunc("GET /login/callback", s.handleLoginCallback)
 	// CLI browser login: Pulumi CLI opens this URL with cliSessionPort + cliSessionNonce.
-	// After Google OAuth, the backend redirects back to the CLI's local HTTP server.
+	// After OIDC provider OAuth, the backend redirects back to the CLI's local HTTP server.
 	mux.HandleFunc("GET /cli-login", s.handleCLILogin)
 	// Welcome page shown after CLI login completes.
 	mux.HandleFunc("GET /welcome/cli", s.handleWelcome)
 }
 
-// handleLoginPage serves the "Sign in with Google" page for manual browser login.
+// handleLoginPage serves the login page for browser-based login.
 func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	csrfToken := generateCSRFToken()
 	if csrfToken == "" {
@@ -43,17 +40,20 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 
 	scheme := requestScheme(r)
 	redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, r.Host)
-	authURL := s.googleAuthURL(redirectURI, state)
+	authURL := s.oidcAuth.AuthCodeURL(redirectURI, state)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := loginPageTmpl.Execute(w, map[string]string{"AuthURL": authURL}); err != nil {
+	if err := loginPageTmpl.Execute(w, map[string]string{
+		"AuthURL":      authURL,
+		"ProviderName": s.oidcAuth.Config().ProviderName,
+	}); err != nil {
 		slog.Error("render login page", "error", err)
 	}
 }
 
 // handleCLILogin handles the Pulumi CLI's browser-based login flow.
 // The CLI opens this URL with cliSessionPort, cliSessionNonce, and cliSessionDescription.
-// We redirect to Google OAuth; on callback, instead of showing a page, we redirect
+// We redirect to the OIDC provider; on callback, instead of showing a page, we redirect
 // to the CLI's local HTTP server at http://localhost:PORT/?accessToken=TOKEN&nonce=NONCE.
 func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
 	port := r.URL.Query().Get("cliSessionPort")
@@ -75,19 +75,19 @@ func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
 
 	scheme := requestScheme(r)
 	redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, r.Host)
-	authURL := s.googleAuthURL(redirectURI, state)
+	authURL := s.oidcAuth.AuthCodeURL(redirectURI, state)
 
 	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
 }
 
-// handleLoginCallback handles the OAuth2 callback from Google.
+// handleLoginCallback handles the OAuth2 callback from the OIDC provider.
 // Works for both browser login (state starts with "csrf:") and CLI login (state starts with "cli:").
 func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	// Check for OAuth error.
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
-		renderError(w, "Google login failed: "+errParam)
+		renderError(w, "Login failed: "+errParam)
 		return
 	}
 
@@ -119,12 +119,12 @@ func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build the redirect URI (must match what was sent to Google).
+	// Build the redirect URI (must match what was sent to the provider).
 	scheme := requestScheme(r)
 	redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, r.Host)
 
 	// Exchange the authorization code for tokens.
-	codeResult, err := s.exchangeCodeForIDToken(code, redirectURI)
+	codeResult, err := s.oidcAuth.ExchangeCode(r.Context(), code, redirectURI)
 	if err != nil {
 		slog.Error("code exchange failed", "error", err)
 		renderError(w, "Failed to exchange authorization code. Please try again.")
@@ -132,7 +132,7 @@ func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate the ID token and mint a backend access token.
-	result, err := s.googleAuth.Exchange(r.Context(), codeResult.IDToken)
+	result, err := s.oidcAuth.Exchange(r.Context(), codeResult.IDToken)
 	if err != nil {
 		slog.Error("ID token exchange failed", "error", err)
 
@@ -153,13 +153,14 @@ func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist the token in the database, including the refresh token for
-	// later re-validation against Google (Dex pattern: deactivated users
-	// will be detected when the refresh token is rejected).
+	// later re-validation (Dex pattern: deactivated users will be detected
+	// when the refresh token is rejected).
 	if err := s.tokenStore.CreateToken(r.Context(), &storage.Token{
 		TokenHash:    result.TokenHash,
 		UserName:     result.UserName,
 		Description:  tokenDescription(state),
 		RefreshToken: codeResult.RefreshToken,
+		Groups:       result.Groups,
 		ExpiresAt:    &result.ExpiresAt,
 	}); err != nil {
 		slog.Error("failed to store token", "error", err)
@@ -177,7 +178,7 @@ func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
 			slog.String("actor", result.UserName),
 			slog.String("action", "login_success"),
 			slog.String("status", "granted"),
-			slog.String("auth_method", "google-oauth"),
+			slog.String("auth_method", "oidc"),
 			slog.String("ip_address", r.RemoteAddr),
 		),
 	)
@@ -240,17 +241,6 @@ func requestScheme(r *http.Request) string {
 	return "http"
 }
 
-// googleAuthURL builds the Google OAuth2 authorization URL.
-func (s *Server) googleAuthURL(redirectURI, state string) string {
-	return fmt.Sprintf(
-		"https://accounts.google.com/o/oauth2/v2/auth?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&state=%s&access_type=offline&prompt=select_account",
-		url.QueryEscape(s.googleAuth.Config().ClientID),
-		url.QueryEscape(redirectURI),
-		url.QueryEscape("openid email profile"),
-		url.QueryEscape(state),
-	)
-}
-
 // extractCSRFToken extracts the CSRF token from the OAuth state string.
 // State formats: "csrf:<token>" or "cli:<port>:<nonce>:<token>".
 func extractCSRFToken(state string) string {
@@ -284,60 +274,6 @@ func tokenDescription(state string) string {
 	return "browser-login"
 }
 
-// codeExchangeResult contains the tokens returned from Google's authorization code exchange.
-type codeExchangeResult struct {
-	IDToken      string
-	RefreshToken string //nolint:gosec // field name, not a credential
-}
-
-// exchangeCodeForIDToken exchanges an OAuth2 authorization code for tokens
-// via Google's token endpoint. Returns the ID token and (if available) the
-// refresh token for later re-validation.
-func (s *Server) exchangeCodeForIDToken(code, redirectURI string) (*codeExchangeResult, error) {
-	data := url.Values{
-		"code":          {code},
-		"client_id":     {s.googleAuth.Config().ClientID},
-		"client_secret": {s.googleClientSecret},
-		"redirect_uri":  {redirectURI},
-		"grant_type":    {"authorization_code"},
-	}
-
-	resp, err := http.Post( //nolint:gosec // URL is constant
-		"https://oauth2.googleapis.com/token",
-		"application/x-www-form-urlencoded",
-		strings.NewReader(data.Encode()),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("token request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read token response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, body)
-	}
-
-	var tokenResp struct {
-		IDToken      string `json:"id_token"`      //nolint:tagliatelle // Google API naming
-		RefreshToken string `json:"refresh_token"` //nolint:tagliatelle,gosec // Google API naming
-	}
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return nil, fmt.Errorf("parse token response: %w", err)
-	}
-	if tokenResp.IDToken == "" {
-		return nil, errors.New("no id_token in response")
-	}
-
-	return &codeExchangeResult{
-		IDToken:      tokenResp.IDToken,
-		RefreshToken: tokenResp.RefreshToken,
-	}, nil
-}
-
 func renderError(w http.ResponseWriter, msg string) {
 	if err := errorPageTmpl.Execute(w, map[string]string{"Error": msg}); err != nil {
 		slog.Error("render error page", "error", err)
@@ -359,18 +295,18 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
   .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); padding: 48px 40px; max-width: 420px; width: 100%; text-align: center; }
   h1 { font-size: 24px; margin-bottom: 8px; color: #1a1a2e; }
   .subtitle { color: #666; margin-bottom: 32px; font-size: 14px; }
-  .google-btn { display: inline-flex; align-items: center; gap: 12px; background: #fff; border: 1px solid #dadce0; border-radius: 8px; padding: 12px 24px; font-size: 16px; color: #3c4043; text-decoration: none; cursor: pointer; transition: background 0.2s, box-shadow 0.2s; }
-  .google-btn:hover { background: #f8f9fa; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
-  .google-btn svg { width: 20px; height: 20px; }
+  .sso-btn { display: inline-flex; align-items: center; gap: 12px; background: #fff; border: 1px solid #dadce0; border-radius: 8px; padding: 12px 24px; font-size: 16px; color: #3c4043; text-decoration: none; cursor: pointer; transition: background 0.2s, box-shadow 0.2s; }
+  .sso-btn:hover { background: #f8f9fa; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+  .sso-btn svg { width: 20px; height: 20px; }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>Pulumi Backend</h1>
   <p class="subtitle">Sign in to get your access token</p>
-  <a href="{{.AuthURL}}" class="google-btn">
-    <svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-    Sign in with Google
+  <a href="{{.AuthURL}}" class="sso-btn">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+    Sign in with {{.ProviderName}}
   </a>
 </div>
 </body>
