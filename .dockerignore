@@ -1,0 +1,17 @@
+# Default Deny - Ignore everything by default
+*
+!*/
+
+# Explicitly Allow - Source Code
+!cmd/
+!internal/
+!go.mod
+!go.sum
+
+# Explicitly Deny - Tests, Mocks, Documentation inside allowed dirs
+**/*_test.go
+**/tests/
+**/docs/
+**/examples/
+**/.git/
+**/.github/

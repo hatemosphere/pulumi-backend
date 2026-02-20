@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -152,6 +153,7 @@ func (a *GoogleAuthenticator) Exchange(ctx context.Context, rawIDToken string) (
 
 	emailVerified, _ := payload.Claims["email_verified"].(bool)
 	if !emailVerified {
+		slog.Warn("Login rejected: email not verified", "email", email)
 		return nil, errors.New("email not verified")
 	}
 
@@ -159,9 +161,12 @@ func (a *GoogleAuthenticator) Exchange(ctx context.Context, rawIDToken string) (
 	if len(a.config.AllowedDomains) > 0 {
 		hd, _ := payload.Claims["hd"].(string)
 		if !a.isDomainAllowed(hd) {
+			slog.Warn("Login rejected: domain not allowed", "email", email, "domain", hd, "allowed_domains", a.config.AllowedDomains)
 			return nil, fmt.Errorf("domain %q not in allowed domains", hd)
 		}
 	}
+
+	slog.Debug("Google ID token validated successfully", "email", email)
 
 	// Resolve group memberships.
 	var groups []string

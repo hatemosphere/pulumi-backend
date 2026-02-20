@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/klauspost/compress/gzip"
@@ -350,24 +351,7 @@ func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, conti
 }
 
 func splitToken(token string) []string {
-	// A naive split by '/'. In a real system, we should use a safer delimiter or encoding.
-	// Pulumi names usually don't contain slashes.
-	// Implement a manual split to handle exactly 3 parts.
-	parts := make([]string, 0, 3)
-	start := 0
-	slashes := 0
-	for i, r := range token {
-		if r == '/' {
-			slashes++
-			if slashes <= 2 {
-				parts = append(parts, token[start:i])
-				start = i + 1
-			}
-		}
-	}
-	if start < len(token) {
-		parts = append(parts, token[start:])
-	}
+	parts := strings.SplitN(token, "/", 3)
 	// Pad if necessary
 	for len(parts) < 3 {
 		parts = append(parts, "")
@@ -453,7 +437,17 @@ func maybeDecompress(data []byte) ([]byte, error) {
 			return nil, err
 		}
 		defer gr.Close()
-		return io.ReadAll(gr)
+
+		limit := int64(512 * 1024 * 1024) // 512 MB limit to prevent decompression bombs
+		limitReader := io.LimitReader(gr, limit+1)
+		decompressed, err := io.ReadAll(limitReader)
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(decompressed)) > limit {
+			return nil, fmt.Errorf("decompressed deployment exceeds maximum size of 512MB")
+		}
+		return decompressed, nil
 	}
 	return data, nil
 }

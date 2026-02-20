@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path/filepath"
 
@@ -38,11 +39,16 @@ func (r *RBACResolver) Resolve(identity *UserIdentity, org, project, stack strin
 	if identity == nil {
 		return PermissionNone
 	}
+
+	stackPath := org + "/" + project + "/" + stack
+
 	// Admin users (single-tenant mode) bypass RBAC entirely.
 	if identity.IsAdmin {
+		slog.Debug("RBAC bypass: user is admin", "user", identity.UserName, "stack", stackPath)
 		return PermissionAdmin
 	}
 	if r.config == nil {
+		slog.Debug("RBAC disabled: using default permission", "user", identity.UserName, "stack", stackPath, "default", r.defaultPermission)
 		return r.defaultPermission
 	}
 
@@ -52,7 +58,6 @@ func (r *RBACResolver) Resolve(identity *UserIdentity, org, project, stack strin
 	}
 
 	best := r.defaultPermission
-	stackPath := org + "/" + project + "/" + stack
 
 	// Check stack-specific policies first (more specific).
 	for _, sp := range r.config.StackPolicies {
@@ -65,9 +70,11 @@ func (r *RBACResolver) Resolve(identity *UserIdentity, org, project, stack strin
 		}
 		perm, err := ParsePermission(sp.Permission)
 		if err != nil {
+			slog.Warn("RBAC config error: invalid stack policy permission", "group", sp.Group, "pattern", sp.StackPattern, "permission", sp.Permission)
 			continue
 		}
 		if perm > best {
+			slog.Debug("RBAC match: stack policy applied", "user", identity.UserName, "group", sp.Group, "pattern", sp.StackPattern, "permission", sp.Permission)
 			best = perm
 		}
 	}
@@ -79,9 +86,11 @@ func (r *RBACResolver) Resolve(identity *UserIdentity, org, project, stack strin
 		}
 		perm, err := ParsePermission(gr.Permission)
 		if err != nil {
+			slog.Warn("RBAC config error: invalid group role permission", "group", gr.Group, "permission", gr.Permission)
 			continue
 		}
 		if perm > best {
+			slog.Debug("RBAC match: group role applied", "user", identity.UserName, "group", gr.Group, "permission", gr.Permission)
 			best = perm
 		}
 	}
@@ -102,8 +111,26 @@ func RequirePermission(ctx context.Context, resolver *RBACResolver, org, project
 	}
 	effective := resolver.Resolve(identity, org, project, stack)
 	if effective >= required {
+		slog.Debug("RBAC check passed", "user", identity.UserName, "stack", org+"/"+project+"/"+stack, "required", required, "effective", effective)
 		return nil
 	}
+
+	actor := "anonymous"
+	if identity != nil {
+		actor = identity.UserName
+	}
+
+	// Emit Idiomatic Audit Log for Access Denied.
+	slog.Warn("Audit Log: Access Denied",
+		slog.Group("audit",
+			slog.String("actor", actor),
+			slog.String("action", "access_stack_endpoint"),
+			slog.String("resource", org+"/"+project+"/"+stack),
+			slog.String("status", "denied"),
+			slog.String("reason", fmt.Sprintf("insufficient_permissions (require %s, have %s)", required, effective)),
+		),
+	)
+
 	return huma.NewError(http.StatusForbidden,
 		fmt.Sprintf("insufficient permissions: require %s, have %s", required, effective))
 }

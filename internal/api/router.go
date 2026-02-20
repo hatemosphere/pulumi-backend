@@ -303,10 +303,12 @@ func (s *Server) authJWTHuma(api huma.API, ctx huma.Context, next func(huma.Cont
 	tokenValue := strings.TrimPrefix(authHeader, "token ")
 	identity, err := s.jwtAuth.Validate(tokenValue)
 	if err != nil {
+		slog.Warn("JWT validation failed", "error", err)
 		_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "invalid JWT: "+err.Error())
 		return
 	}
 
+	slog.Debug("JWT authentication successful", "user", identity.UserName, "groups", identity.Groups)
 	next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
 }
 
@@ -327,10 +329,12 @@ func (s *Server) authGoogleHuma(api huma.API, ctx huma.Context, next func(huma.C
 		return
 	}
 	if tok == nil {
+		slog.Debug("invalid access token provided")
 		_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "invalid access token")
 		return
 	}
 	if tok.ExpiresAt != nil && tok.ExpiresAt.Before(time.Now()) {
+		slog.Debug("access token expired", "user", tok.UserName, "expires_at", tok.ExpiresAt)
 		_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "access token expired")
 		return
 	}
@@ -347,9 +351,11 @@ func (s *Server) authGoogleHuma(api huma.API, ctx huma.Context, next func(huma.C
 			slog.Warn("groups resolution failed", "user", tok.UserName, "error", err) //nolint:gosec // structured logger, not format string
 		} else {
 			identity.Groups = groups
+			slog.Debug("groups resolved successfully", "user", tok.UserName, "group_count", len(groups))
 		}
 	}
 
+	slog.Debug("Google authentication successful", "user", identity.UserName)
 	next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
 
 	// Async: touch last_used_at + re-validate against Google if refresh token is stored.

@@ -129,6 +129,5 @@ GCP-dependent tests (`TestGoogleAuthE2E`, `TestGroupsResolutionADC`) require Goo
 
 ## TODO
 
-- [ ] Dockerfile
 - [ ] Web UI
 - [ ] Horizontal scaling beyond single SQLite node

@@ -135,6 +135,19 @@ func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
 	result, err := s.googleAuth.Exchange(r.Context(), codeResult.IDToken)
 	if err != nil {
 		slog.Error("ID token exchange failed", "error", err)
+
+		// Audit Log: Login Failed
+		slog.Warn("Audit Log: Login Failed",
+			slog.Group("audit",
+				slog.String("actor", "anonymous"),
+				slog.String("action", "login_attempt"),
+				slog.String("status", "failed"),
+				slog.String("reason", "id_token_exchange_failed"),
+				slog.String("error", err.Error()),
+				slog.String("ip_address", r.RemoteAddr),
+			),
+		)
+
 		renderError(w, "Authentication failed: "+err.Error())
 		return
 	}
@@ -157,6 +170,17 @@ func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
 	if codeResult.RefreshToken != "" {
 		slog.Info("stored refresh token for re-validation", "user", result.UserName) //nolint:gosec // structured logger
 	}
+
+	// Audit Log: Login Success
+	slog.Info("Audit Log: Login Success",
+		slog.Group("audit",
+			slog.String("actor", result.UserName),
+			slog.String("action", "login_success"),
+			slog.String("status", "granted"),
+			slog.String("auth_method", "google-oauth"),
+			slog.String("ip_address", r.RemoteAddr),
+		),
+	)
 
 	// CLI login flow: redirect to the CLI's local server with the token.
 	if strings.HasPrefix(state, "cli:") {

@@ -23,7 +23,7 @@ none < read < write < admin
 | `none` | Nothing (effectively locked out) |
 | `read` | GET operations on stacks, exports, history |
 | `write` | Everything in `read` + create stacks, start updates, checkpoint, encrypt/decrypt |
-| `admin` | Everything in `write` + delete stacks, cancel updates, admin endpoints |
+| `admin` | Everything in `write` + delete stacks, cancel updates, rename stacks. When set via `groupRoles`, it also grants **Global Admin** access to `/api/admin/*` endpoints. |
 
 ## Config File Format
 
@@ -116,18 +116,27 @@ stackPolicies:
 
 RBAC only applies to stack-scoped operations (routes with `orgName` in the path). Routes like `/api/user`, `/api/user/stacks`, and public endpoints (`/`, `/metrics`, `/api/openapi`) are not subject to RBAC.
 
+## Global vs Scoped Admin
+
+The `admin` permission behaves differently depending on how it is granted:
+
+1. **Global (System) Admin**: Granted via `groupRoles`. This allows the user to act as an administrator over the entire Pulumi Backend instance. It grants access to **all** `admin` level features across all stacks, as well as the system-wide Admin Endpoints.
+2. **Scoped (Stack/Org) Admin**: Granted via `stackPolicies`. This allows the user to act as an administrator *only* over the specific stacks matched by the `stackPattern`. They can delete or rename those specific stacks, but they **cannot** access system-wide Admin Endpoints.
+
+You should use `stackPolicies` with `*` wildcards to grant "Organization Admins" or "Project Admins", reserving the `groupRoles: admin` mapping for your actual backend infrastructure operators.
+
 ## Admin Endpoints
 
-Admin endpoints (`/api/admin/*`) require the `admin` permission level. This is determined by:
+System-wide Admin endpoints (`/api/admin/*`) require the **Global Admin** permission level. This is determined by:
 
-1. **Single-tenant mode**: All users are admin automatically.
-2. **Google/JWT mode with RBAC**: Users whose group resolves to `admin` permission via `groupRoles` get admin access.
-3. **Google/JWT mode without RBAC**: Admin endpoints are inaccessible (no way to grant admin).
+1. **Single-tenant mode**: All users are global admins automatically.
+2. **Google/JWT mode with RBAC**: Users whose group resolves to `admin` permission via `groupRoles` get global admin access. 
+3. **Google/JWT mode without RBAC**: Admin endpoints are inaccessible (no way to grant global admin).
 
-Admin endpoints include:
-- `POST /api/admin/backup` — Create a database backup
-- `GET /api/admin/tokens/{userName}` — List a user's tokens (token hash prefix, description, timestamps)
-- `DELETE /api/admin/tokens/{userName}` — Revoke all tokens for a user
+Global Admin endpoints include:
+- `POST /api/admin/backup` — Create a database SQLite backup safely using `VACUUM INTO`
+- `GET /api/admin/tokens/{userName}` — List a user's API tokens (token hash prefix, description, timestamps)
+- `DELETE /api/admin/tokens/{userName}` — Revoke all active tokens for a given user
 
 ## Enabling RBAC
 
