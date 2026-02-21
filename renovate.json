@@ -4,6 +4,9 @@
     "config:recommended"
   ],
   "labels": ["dependencies"],
+  "gomod": {
+    "rangeStrategy": "bump"
+  },
   "postUpdateOptions": ["gomodTidy"],
   "ignorePaths": ["reference/**"],
   "packageRules": [
