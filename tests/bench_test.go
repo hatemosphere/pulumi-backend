@@ -160,7 +160,7 @@ func BenchmarkHealthCheck(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		resp := benchHTTPDo(b, "GET", tb.URL+"/", nil)
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}
 }
@@ -175,7 +175,7 @@ func BenchmarkCreateStack(b *testing.B) {
 		body := fmt.Sprintf(`{"stackName":"stack-%d"}`, i)
 		resp := benchHTTPDo(b, "POST",
 			fmt.Sprintf("%s/api/stacks/organization/project-%d", tb.URL, i), []byte(body))
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != 200 {
 			b.Fatalf("create stack: status %d", resp.StatusCode)
@@ -201,7 +201,7 @@ func BenchmarkCheckpointSave(b *testing.B) {
 				// Create update.
 				resp = benchHTTPDo(b, "POST", tb.URL+"/api/stacks/organization/project/bench/update", []byte(`{"kind":"update"}`))
 				var createResult struct{ UpdateID string }
-				json.NewDecoder(resp.Body).Decode(&createResult)
+				_ = json.NewDecoder(resp.Body).Decode(&createResult)
 				resp.Body.Close()
 				updateID := createResult.UpdateID
 
@@ -211,7 +211,7 @@ func BenchmarkCheckpointSave(b *testing.B) {
 					Version int
 					Token   string
 				}
-				json.NewDecoder(resp.Body).Decode(&startResult)
+				_ = json.NewDecoder(resp.Body).Decode(&startResult)
 				resp.Body.Close()
 
 				// Save checkpoint.
@@ -222,7 +222,7 @@ func BenchmarkCheckpointSave(b *testing.B) {
 				req.Header.Set("Authorization", "token test-token")
 				req.Header.Set("Content-Type", "application/json")
 				resp, _ = http.DefaultClient.Do(req)
-				io.Copy(io.Discard, resp.Body)
+				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
 				if resp.StatusCode != 200 {
 					b.Fatalf("checkpoint save: status %d (iter %d)", resp.StatusCode, i)
@@ -232,7 +232,7 @@ func BenchmarkCheckpointSave(b *testing.B) {
 				resp = benchHTTPDo(b, "POST",
 					fmt.Sprintf("%s/api/stacks/organization/project/bench/update/%s/complete", tb.URL, updateID),
 					[]byte(`{"status":"succeeded","result":{"create":1}}`))
-				io.Copy(io.Discard, resp.Body)
+				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
 			}
 		})
@@ -260,7 +260,7 @@ func BenchmarkStateExport(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				resp = benchHTTPDo(b, "GET", tb.URL+"/api/stacks/organization/project/bench/export", nil)
-				io.Copy(io.Discard, resp.Body)
+				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
 				if resp.StatusCode != 200 {
 					b.Fatalf("export: status %d", resp.StatusCode)
@@ -286,7 +286,7 @@ func BenchmarkSecretsEncrypt(b *testing.B) {
 		resp = benchHTTPDo(b, "POST",
 			tb.URL+"/api/stacks/organization/project/secrets-bench/encrypt",
 			body)
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != 200 {
 			b.Fatalf("encrypt: status %d", resp.StatusCode)
@@ -306,7 +306,7 @@ func BenchmarkSecretsDecrypt(b *testing.B) {
 	encBody, _ := json.Marshal(map[string]string{"plaintext": plaintext})
 	resp = benchHTTPDo(b, "POST", tb.URL+"/api/stacks/organization/project/secrets-bench/encrypt", encBody)
 	var encResult struct{ Ciphertext string }
-	json.NewDecoder(resp.Body).Decode(&encResult)
+	_ = json.NewDecoder(resp.Body).Decode(&encResult)
 	resp.Body.Close()
 
 	decBody, _ := json.Marshal(map[string]string{"ciphertext": encResult.Ciphertext})
@@ -317,7 +317,7 @@ func BenchmarkSecretsDecrypt(b *testing.B) {
 		resp = benchHTTPDo(b, "POST",
 			tb.URL+"/api/stacks/organization/project/secrets-bench/decrypt",
 			decBody)
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode != 200 {
 			b.Fatalf("decrypt: status %d", resp.StatusCode)
@@ -342,7 +342,7 @@ func BenchmarkListStacks(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				resp := benchHTTPDo(b, "GET", tb.URL+"/api/user/stacks", nil)
-				io.Copy(io.Discard, resp.Body)
+				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
 				if resp.StatusCode != 200 {
 					b.Fatalf("list stacks: status %d", resp.StatusCode)
@@ -429,7 +429,7 @@ func BenchmarkSHA256(b *testing.B) {
 	for _, size := range []int{1024, 10 * 1024, 100 * 1024, 1024 * 1024} {
 		b.Run(fmt.Sprintf("size=%dKB", size/1024), func(b *testing.B) {
 			data := make([]byte, size)
-			rand.Read(data)
+			_, _ = rand.Read(data)
 			b.SetBytes(int64(size))
 
 			b.ResetTimer()

@@ -721,7 +721,7 @@ func decompress(data []byte) ([]byte, error) {
 	buf.Reset()
 	buf.Grow(len(data) * 4)
 
-	_, err = io.Copy(buf, gr)
+	_, err = io.Copy(buf, gr) //nolint:gosec // G110: input is our own gzip-compressed state, not untrusted
 	if err != nil {
 		bufPool.Put(buf)
 		return nil, err
