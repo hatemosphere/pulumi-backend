@@ -12,6 +12,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 - **api/** — huma v2 typed handlers, auto-generated OpenAPI spec, auth + RBAC middleware
 - **auth/** — Authentication (single-tenant, Google OIDC, generic OIDC, JWT), RBAC resolver, groups cache
 - **engine/** — Business logic: stack locks, LRU cache, delta/journal replay, AES-256-GCM secrets
+- **backup/** — Remote backup providers (S3-compatible), scheduler, retention pruning
 - **storage/** — `Store` interface + SQLite impl. Deployments stored gzip-compressed.
 - **config/** — Flag + env var parsing via [ff/v3](https://github.com/peterbourgon/ff) (`PULUMI_BACKEND_*` prefix, auto-mapped from flag names)
 
@@ -39,6 +40,9 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | `internal/engine/delta.go` | Byte-offset delta application |
 | `internal/engine/aesgcm.go` | Shared AES-256-GCM seal/open helpers |
 | `internal/engine/secrets_provider.go` | `SecretsProvider` interface + local/KMS implementations |
+| `internal/backup/backup.go` | Provider interface, BackupInfo, Prune free function |
+| `internal/backup/s3.go` | S3Provider (S3-compatible: AWS, MinIO, R2, B2) |
+| `internal/backup/scheduler.go` | Ticker-based periodic backup scheduler |
 | `internal/storage/sqlite.go` | SQLite implementation (inline schema, includes `server_config` + `secrets_keys` tables) |
 | `internal/storage/storage.go` | `Store` interface + data types |
 | `tests/spec_test.go` | OpenAPI spec compliance vs upstream + CLI error semantics |
@@ -50,6 +54,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 - `reference/pulumi/` — Upstream Pulumi source clone (for API shape reference)
 - `reference/dex/` — Dex OIDC connector reference (Google connector refresh token pattern)
 - `reference/ff/` — ff library source (flags-first config parsing)
+- `reference/s3-mock/` — grafana/s3-mock clone (in-process S3 mock for backup tests)
 
 ## Build & test
 
@@ -90,9 +95,18 @@ golangci-lint run ./...                                   # lint
 - **Secrets key migration**: `--migrate-secrets-key` flag re-wraps all per-stack DEKs from old provider to new provider, then exits. Supports local↔KMS and key rotation within same provider. Uses `--old-secrets-provider`, `--old-master-key`, `--old-kms-key` flags.
 - **Audit logging**: `audit.Enabled` flag (default true) controls all audit output. Disable with `-audit-logs=false` or `PULUMI_BACKEND_AUDIT_LOGS=false`. Suppressed in test helpers.
 - **Log format**: `-log-format` flag (`json` default, `text` for local dev) + `PULUMI_BACKEND_LOG_FORMAT` env var.
+- **Backup**: `VACUUM INTO` creates consistent point-in-time SQLite snapshots. In WAL mode, uses shared/read lock only — concurrent writes are NOT blocked. Backups uploaded to S3-compatible providers via `backup.Provider` interface. `backup.Scheduler` runs periodic backups (ticker goroutine, same pattern as `eventFlusher`). `backup.Prune` enforces retention policy. Engine's `Backup()` returns `*BackupResult{LocalPath, RemoteKeys}`. Admin API: `POST /api/admin/backup`. AWS credentials via standard SDK chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, IAM role, instance metadata).
+- **Backup tests**: Unit tests use `grafana/s3-mock` (in-process mock S3 server that returns real `*s3.Client` — no interface mocking needed). Integration tests in `reliability_test.go` verify backup during active updates, concurrent checkpoints, and no-destination error.
 - Deployments: gzip-compressed in DB, zero-copy gzip export when client accepts it
 - Leases: in-memory `sync.Map` + SQLite; lost on restart
 - State versions: pruned to last N (default 50) per stack
 - Capabilities: `delta-checkpoint-uploads-v2`, `batch-encrypt`
 - CLI error semantics: error messages match exact patterns the upstream CLI checks (e.g., `"Bad Request: Stack still contains resources."` for deleteStack 400). Validated by `TestCLIErrorSemantics`.
 - No Pulumi SDK import: all API shapes hand-coded from reference clone
+
+## CRITICAL: Post-implementation checklist
+
+After completing any plan or feature implementation, ALWAYS update documentation:
+- **README.md** — config tables, API compatibility list, reliability test descriptions
+- **CLAUDE.md** — architecture, key files, design notes, reference code
+- **`docs/`** — new guide if the feature warrants one (auth modes, RBAC, etc.)

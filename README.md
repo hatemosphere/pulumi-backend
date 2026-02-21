@@ -76,7 +76,23 @@ On startup, the backend verifies the master key by decrypting a canary value sto
 | `-stack-list-page-size` | `PULUMI_BACKEND_STACK_LIST_PAGE_SIZE` | `100` | Page size for stack listings |
 | `-event-buffer-size` | `PULUMI_BACKEND_EVENT_BUFFER_SIZE` | `1000` | Max buffered events before forced flush |
 | `-event-flush-interval` | `PULUMI_BACKEND_EVENT_FLUSH_INTERVAL` | `1s` | Periodic event flush interval |
-| `-backup-dir` | `PULUMI_BACKEND_BACKUP_DIR` | (disabled) | Directory for SQLite VACUUM INTO backups |
+
+#### Backup
+
+| Flag | Env | Default | Description |
+|---|---|---|---|
+| `-backup-dir` | `PULUMI_BACKEND_BACKUP_DIR` | (disabled) | Directory for local SQLite VACUUM INTO backups |
+| `-backup-s3-bucket` | `PULUMI_BACKEND_BACKUP_S3_BUCKET` | (disabled) | S3 bucket for remote backups |
+| `-backup-s3-region` | `PULUMI_BACKEND_BACKUP_S3_REGION` | `us-east-1` | AWS region |
+| `-backup-s3-endpoint` | `PULUMI_BACKEND_BACKUP_S3_ENDPOINT` | | Custom S3 endpoint (MinIO, R2, B2) |
+| `-backup-s3-prefix` | `PULUMI_BACKEND_BACKUP_S3_PREFIX` | `backups/` | Key prefix in S3 bucket |
+| `-backup-s3-force-path-style` | `PULUMI_BACKEND_BACKUP_S3_FORCE_PATH_STYLE` | `false` | Path-style S3 addressing (MinIO) |
+| `-backup-schedule` | `PULUMI_BACKEND_BACKUP_SCHEDULE` | `0` | Periodic backup interval (`6h`, `24h`; 0 = disabled) |
+| `-backup-retention` | `PULUMI_BACKEND_BACKUP_RETENTION` | `0` | Backups to keep per destination (0 = unlimited) |
+
+Backups use SQLite's `VACUUM INTO` which creates a consistent point-in-time snapshot under a shared read lock — concurrent writes are not blocked. Both local directory and S3 destinations can be active simultaneously. AWS credentials are resolved via the standard SDK chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, IAM role, instance metadata).
+
+Trigger a manual backup: `POST /api/admin/backup`. With scheduled backups enabled, the backend also runs periodic backups automatically.
 
 #### Secrets provider
 
@@ -157,7 +173,7 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 - Structured audit logging (actor, action, resource, IP for all mutating operations)
 - Prometheus metrics (`/metrics`)
 - OpenAPI 3.1 spec (`GET /api/openapi`)
-- Database backup (`POST /api/admin/backup`)
+- Database backup (`POST /api/admin/backup`) with S3-compatible remote upload, scheduled backups, and retention management
 - Secrets key migration (`--migrate-secrets-key` for local key rotation and local↔KMS migration)
 
 ## Audit logging
@@ -204,6 +220,7 @@ The `tests/reliability_test.go` suite covers state consistency edge cases:
 - Verbatim checkpoint mode and mixed checkpoint mode transitions (Full → Verbatim → Delta → Full)
 - Locking & lease edge cases (double start, checkpoint/complete after cancel)
 - Concurrent operations (parallel checkpoints, concurrent read/write, concurrent imports)
+- Backup consistency (backup during active update, backup during concurrent checkpoints, no-destination error)
 - Stack lifecycle (recreation after deletion, operations during active updates, secrets after rename)
 - Secrets consistency (encrypt/decrypt roundtrip, batch operations, key preservation across rename, key migration)
 - Master key verification (canary persistence across restart, mismatch detection)

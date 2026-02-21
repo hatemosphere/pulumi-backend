@@ -2222,3 +2222,167 @@ func TestReliability_MasterKeyMismatchFails(t *testing.T) {
 		t.Fatal("expected decrypt to fail with wrong master key, but got 200")
 	}
 }
+
+// --- Backup reliability tests ---
+
+// TestReliability_BackupDuringActiveUpdate triggers a backup while an update is
+// in progress (checkpoint posted but not yet completed). The backup file must be
+// valid SQLite containing the last committed state. The original update must
+// complete successfully afterward (main DB unaffected by VACUUM INTO).
+func TestReliability_BackupDuringActiveUpdate(t *testing.T) {
+	backupDir := t.TempDir()
+	tb := startBackendWithConfig(t, backendConfig{
+		engineConfig: engine.ManagerConfig{
+			BackupDir: backupDir,
+		},
+	})
+
+	project, stack := "rel-backup-active", "dev"
+	rCreateStack(t, tb, project, stack)
+
+	// Run a full update to establish version 1 with known state.
+	v1Deploy := rMakeDeployment("v1-committed")
+	rRunFullUpdate(t, tb, project, stack, v1Deploy)
+
+	// Start a second update and post a checkpoint (but don't complete).
+	updateID, _ := rCreateAndStartUpdate(t, tb, project, stack, 0)
+	rPostCheckpoint(t, tb, project, stack, updateID, rMakeDeployment("v2-in-progress"))
+
+	// Trigger backup mid-flight.
+	resp := tb.httpDo(t, "POST", "/api/admin/backup", nil)
+	var backupResp struct {
+		Path string `json:"path"`
+	}
+	httpJSON(t, resp, &backupResp)
+	if backupResp.Path == "" {
+		t.Fatal("backup path is empty")
+	}
+
+	// Verify backup file is valid SQLite by opening it as a store.
+	backupStore, err := storage.NewSQLiteStore(backupResp.Path, storage.SQLiteStoreConfig{})
+	if err != nil {
+		t.Fatalf("backup is not valid SQLite: %v", err)
+	}
+	defer backupStore.Close()
+
+	// Verify the backup contains the stack with committed state.
+	backupStack, err := backupStore.GetStack(context.Background(), rOrg, project, stack)
+	if err != nil {
+		t.Fatalf("failed to get stack from backup: %v", err)
+	}
+	if backupStack == nil {
+		t.Fatal("stack not found in backup")
+	}
+
+	// Now complete the original update — main DB must still work.
+	rCompleteUpdate(t, tb, project, stack, updateID, "succeeded")
+
+	// Verify the main DB has the v2 state.
+	resp = tb.httpDo(t, "GET",
+		fmt.Sprintf("/api/stacks/%s/%s/%s/export", rOrg, project, stack), nil)
+	var exportData json.RawMessage
+	httpJSON(t, resp, &exportData)
+	if !strings.Contains(string(exportData), "v2-in-progress") {
+		t.Fatal("main DB should have v2 state after completing update")
+	}
+}
+
+// TestReliability_BackupDuringConcurrentCheckpoints starts updates on 3 stacks,
+// posts checkpoints concurrently while triggering a backup, and verifies that
+// all operations succeed. The backup must be valid and the main DB unaffected.
+func TestReliability_BackupDuringConcurrentCheckpoints(t *testing.T) {
+	backupDir := t.TempDir()
+	tb := startBackendWithConfig(t, backendConfig{
+		engineConfig: engine.ManagerConfig{
+			BackupDir: backupDir,
+		},
+	})
+
+	stacks := []struct{ project, stack string }{
+		{"rel-backup-conc-1", "dev"},
+		{"rel-backup-conc-2", "dev"},
+		{"rel-backup-conc-3", "dev"},
+	}
+
+	// Create stacks and start updates.
+	updateIDs := make([]string, len(stacks))
+	for i, s := range stacks {
+		rCreateStack(t, tb, s.project, s.stack)
+		rRunFullUpdate(t, tb, s.project, s.stack, rMakeDeployment("initial"))
+		uid, _ := rCreateAndStartUpdate(t, tb, s.project, s.stack, 0)
+		updateIDs[i] = uid
+	}
+
+	// Post 5 checkpoints per stack concurrently + trigger backup simultaneously.
+	var wg sync.WaitGroup
+	errs := make(chan error, 100)
+
+	for i, s := range stacks {
+		wg.Add(1)
+		go func(idx int, proj, stk string) {
+			defer wg.Done()
+			for cp := 1; cp <= 5; cp++ {
+				deploy := rMakeDeployment(fmt.Sprintf("s%d-cp%d", idx, cp))
+				resp := tb.httpDo(t, "PATCH",
+					fmt.Sprintf("/api/stacks/%s/%s/%s/update/%s/checkpoint", rOrg, proj, stk, updateIDs[idx]),
+					map[string]any{"version": 3, "deployment": deploy})
+				resp.Body.Close()
+				if resp.StatusCode != 200 {
+					errs <- fmt.Errorf("checkpoint %s/%s cp%d: status %d", proj, stk, cp, resp.StatusCode)
+				}
+			}
+		}(i, s.project, s.stack)
+	}
+
+	// Trigger backup concurrently.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		resp := tb.httpDo(t, "POST", "/api/admin/backup", nil)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			errs <- fmt.Errorf("backup during concurrent checkpoints: status %d", resp.StatusCode)
+		}
+	}()
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Error(err)
+	}
+
+	// Complete all updates and verify main DB works.
+	for i, s := range stacks {
+		rCompleteUpdate(t, tb, s.project, s.stack, updateIDs[i], "succeeded")
+
+		resp := tb.httpDo(t, "GET",
+			fmt.Sprintf("/api/stacks/%s/%s/%s/export", rOrg, s.project, s.stack), nil)
+		var exportData json.RawMessage
+		httpJSON(t, resp, &exportData)
+		if !strings.Contains(string(exportData), fmt.Sprintf("s%d-cp5", i)) {
+			t.Errorf("stack %s/%s: expected last checkpoint marker in exported state", s.project, s.stack)
+		}
+	}
+}
+
+// TestReliability_BackupNoDestination verifies that triggering a backup when
+// neither -backup-dir nor S3 provider is configured returns an error.
+func TestReliability_BackupNoDestination(t *testing.T) {
+	tb := startBackendWithConfig(t, backendConfig{
+		engineConfig: engine.ManagerConfig{
+			// No BackupDir, no BackupProviders.
+		},
+	})
+
+	resp := tb.httpDo(t, "POST", "/api/admin/backup", nil)
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 200 {
+		t.Fatal("expected backup to fail when no destination configured, but got 200")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "no backup destination") {
+		t.Fatalf("expected 'no backup destination' error, got: %s", string(body))
+	}
+}

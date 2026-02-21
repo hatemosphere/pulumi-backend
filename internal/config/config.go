@@ -36,7 +36,14 @@ type Config struct {
 	EventFlushInterval time.Duration // periodic flush interval
 
 	// Backup.
-	BackupDir string // directory for VACUUM INTO backups (empty = disabled)
+	BackupDir              string        // directory for VACUUM INTO backups (empty = disabled)
+	BackupS3Bucket         string        // S3 bucket for remote backups (empty = disabled)
+	BackupS3Region         string        // AWS region (default: us-east-1)
+	BackupS3Endpoint       string        // custom S3 endpoint URL (MinIO, R2, B2)
+	BackupS3Prefix         string        // key prefix in S3 bucket (default: "backups/")
+	BackupS3ForcePathStyle bool          // force path-style S3 addressing (for MinIO)
+	BackupSchedule         time.Duration // periodic backup interval (0 = disabled)
+	BackupRetention        int           // number of backups to keep per destination (0 = unlimited)
 
 	// Secrets provider: "local" (default) or "gcpkms".
 	SecretsProvider string
@@ -113,6 +120,13 @@ func Parse() *Config {
 
 	// Backup flags.
 	fs.StringVar(&c.BackupDir, "backup-dir", "", "directory for database backups (empty = disabled)")
+	fs.StringVar(&c.BackupS3Bucket, "backup-s3-bucket", "", "S3 bucket for remote backups (empty = disabled)")
+	fs.StringVar(&c.BackupS3Region, "backup-s3-region", "us-east-1", "AWS region for S3 backups")
+	fs.StringVar(&c.BackupS3Endpoint, "backup-s3-endpoint", "", "custom S3 endpoint URL (for MinIO, R2, etc.)")
+	fs.StringVar(&c.BackupS3Prefix, "backup-s3-prefix", "backups/", "key prefix in S3 bucket")
+	fs.BoolVar(&c.BackupS3ForcePathStyle, "backup-s3-force-path-style", false, "force path-style S3 addressing (for MinIO)")
+	fs.DurationVar(&c.BackupSchedule, "backup-schedule", 0, "periodic backup interval (e.g., 6h, 24h; 0 = disabled)")
+	fs.IntVar(&c.BackupRetention, "backup-retention", 0, "number of backups to keep per destination (0 = unlimited)")
 
 	// Secrets provider flags.
 	fs.StringVar(&c.SecretsProvider, "secrets-provider", "local", "secrets provider: local or gcpkms")

@@ -16,6 +16,7 @@ import (
 	"github.com/hatemosphere/pulumi-backend/internal/api"
 	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/auth"
+	"github.com/hatemosphere/pulumi-backend/internal/backup"
 	"github.com/hatemosphere/pulumi-backend/internal/config"
 	"github.com/hatemosphere/pulumi-backend/internal/engine"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
@@ -99,6 +100,24 @@ func main() {
 
 	secrets := engine.NewSecretsEngine(secretsProvider)
 
+	// Set up backup providers.
+	var backupProviders []backup.Provider
+	if cfg.BackupS3Bucket != "" {
+		s3Provider, s3Err := backup.NewS3Provider(context.Background(), backup.S3Config{
+			Bucket:         cfg.BackupS3Bucket,
+			Region:         cfg.BackupS3Region,
+			Endpoint:       cfg.BackupS3Endpoint,
+			Prefix:         cfg.BackupS3Prefix,
+			ForcePathStyle: cfg.BackupS3ForcePathStyle,
+		})
+		if s3Err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create S3 backup provider: %v\n", s3Err)
+			os.Exit(1)
+		}
+		backupProviders = append(backupProviders, s3Provider)
+		slog.Info("S3 backup enabled", "bucket", cfg.BackupS3Bucket, "prefix", cfg.BackupS3Prefix)
+	}
+
 	// Create engine manager.
 	mgr, err := engine.NewManager(store, secrets, engine.ManagerConfig{
 		LeaseDuration:      cfg.LeaseDuration,
@@ -106,6 +125,9 @@ func main() {
 		EventBufferSize:    cfg.EventBufferSize,
 		EventFlushInterval: cfg.EventFlushInterval,
 		BackupDir:          cfg.BackupDir,
+		BackupProviders:    backupProviders,
+		BackupSchedule:     cfg.BackupSchedule,
+		BackupRetention:    cfg.BackupRetention,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create engine: %v\n", err)

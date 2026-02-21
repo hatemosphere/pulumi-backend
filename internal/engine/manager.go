@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 
+	"github.com/hatemosphere/pulumi-backend/internal/backup"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
@@ -36,6 +38,15 @@ type ManagerConfig struct {
 	EventBufferSize    int
 	EventFlushInterval time.Duration
 	BackupDir          string
+	BackupProviders    []backup.Provider
+	BackupSchedule     time.Duration
+	BackupRetention    int
+}
+
+// BackupResult holds the result of a backup operation.
+type BackupResult struct {
+	LocalPath  string
+	RemoteKeys map[string]string // provider name → remote key
 }
 
 // Manager is the core engine orchestrating stacks, updates, and state.
@@ -47,6 +58,11 @@ type Manager struct {
 	stackLocks    sync.Map                   // key: org/project/stack -> *stackLock
 	leaseDuration time.Duration
 	backupDir     string
+
+	// Remote backup providers (e.g., S3).
+	backupProviders []backup.Provider
+	backupRetention int
+	backupScheduler *backup.Scheduler
 
 	// Active update tracking.
 	activeUpdates atomic.Int64
@@ -88,6 +104,9 @@ func NewManager(store storage.Store, secrets *SecretsEngine, cfgs ...ManagerConf
 			cfg.EventFlushInterval = c.EventFlushInterval
 		}
 		cfg.BackupDir = c.BackupDir
+		cfg.BackupProviders = c.BackupProviders
+		cfg.BackupSchedule = c.BackupSchedule
+		cfg.BackupRetention = c.BackupRetention
 	}
 
 	cache, err := lru.New[string, []byte](cfg.CacheSize)
@@ -99,27 +118,41 @@ func NewManager(store storage.Store, secrets *SecretsEngine, cfgs ...ManagerConf
 		return nil, err
 	}
 	m := &Manager{
-		store:         store,
-		secrets:       secrets,
-		cache:         cache,
-		secretsCache:  secretsCache,
-		leaseDuration: cfg.LeaseDuration,
-		backupDir:     cfg.BackupDir,
-		eventMax:      cfg.EventBufferSize,
-		flushStop:     make(chan struct{}),
-		flushDone:     make(chan struct{}),
+		store:           store,
+		secrets:         secrets,
+		cache:           cache,
+		secretsCache:    secretsCache,
+		leaseDuration:   cfg.LeaseDuration,
+		backupDir:       cfg.BackupDir,
+		backupProviders: cfg.BackupProviders,
+		backupRetention: cfg.BackupRetention,
+		eventMax:        cfg.EventBufferSize,
+		flushStop:       make(chan struct{}),
+		flushDone:       make(chan struct{}),
 	}
 
 	// Start the periodic event flusher.
 	go m.eventFlusher(cfg.EventFlushInterval)
 
+	// Start backup scheduler if configured.
+	if cfg.BackupSchedule > 0 && (cfg.BackupDir != "" || len(cfg.BackupProviders) > 0) {
+		m.backupScheduler = backup.NewScheduler(func(ctx context.Context) error {
+			_, err := m.Backup(ctx)
+			return err
+		}, cfg.BackupSchedule)
+	}
+
 	return m, nil
 }
 
-// Shutdown flushes buffered events and stops the background flusher.
+// Shutdown flushes buffered events and stops background goroutines.
 func (m *Manager) Shutdown() {
 	close(m.flushStop)
 	<-m.flushDone
+
+	if m.backupScheduler != nil {
+		m.backupScheduler.Shutdown()
+	}
 }
 
 // ActiveUpdateCount returns the number of currently active (in-progress) updates.
@@ -928,10 +961,56 @@ func (m *Manager) ValidateUpdateToken(ctx context.Context, updateID, token strin
 
 // Backup creates a consistent backup of the database.
 // Returns the path to the backup file.
-func (m *Manager) Backup(ctx context.Context) (string, error) {
-	if m.backupDir == "" {
-		return "", errors.New("backup directory not configured (use -backup-dir flag)")
+// Backup creates a consistent database backup and uploads to configured remote providers.
+func (m *Manager) Backup(ctx context.Context) (*BackupResult, error) {
+	if m.backupDir == "" && len(m.backupProviders) == 0 {
+		return nil, errors.New("no backup destination configured (use -backup-dir and/or -backup-s3-bucket)")
 	}
-	path := filepath.Join(m.backupDir, fmt.Sprintf("backup-%s.db", time.Now().Format("20060102-150405")))
-	return path, m.store.Backup(ctx, path)
+
+	// Determine backup file location.
+	dir := m.backupDir
+	if dir == "" {
+		dir = os.TempDir()
+	}
+	filename := fmt.Sprintf("backup-%s.db", time.Now().Format("20060102-150405"))
+	localPath := filepath.Join(dir, filename)
+
+	if err := m.store.Backup(ctx, localPath); err != nil {
+		return nil, fmt.Errorf("vacuum into: %w", err)
+	}
+
+	result := &BackupResult{
+		RemoteKeys: make(map[string]string),
+	}
+
+	if m.backupDir != "" {
+		result.LocalPath = localPath
+	}
+
+	// Upload to remote providers.
+	for _, p := range m.backupProviders {
+		key, err := p.Upload(ctx, localPath)
+		if err != nil {
+			slog.Error("backup upload failed", "provider", p.Name(), "error", err)
+			continue
+		}
+		result.RemoteKeys[p.Name()] = key
+
+		// Prune old backups if retention is configured.
+		if m.backupRetention > 0 {
+			pruned, prunErr := backup.Prune(ctx, p, m.backupRetention)
+			if prunErr != nil {
+				slog.Error("backup pruning failed", "provider", p.Name(), "error", prunErr)
+			} else if pruned > 0 {
+				slog.Info("old backups pruned", "provider", p.Name(), "pruned", pruned)
+			}
+		}
+	}
+
+	// Clean up temp file if no local backup dir (file was only needed for upload).
+	if m.backupDir == "" {
+		os.Remove(localPath) //nolint:errcheck
+	}
+
+	return result, nil
 }

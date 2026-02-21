@@ -567,7 +567,8 @@ type TokenExchangeOutput struct {
 
 type CreateBackupOutput struct {
 	Body struct {
-		Path string `json:"path"`
+		Path       string            `json:"path"`
+		RemoteKeys map[string]string `json:"remoteKeys,omitempty"`
 	}
 }
 

@@ -499,12 +499,13 @@ func (s *Server) registerAdmin(api huma.API) {
 		if err := s.requireAdmin(ctx); err != nil {
 			return nil, err
 		}
-		path, err := s.engine.Backup(ctx)
+		result, err := s.engine.Backup(ctx)
 		if err != nil {
 			return nil, internalError(err)
 		}
 		out := &CreateBackupOutput{}
-		out.Body.Path = path
+		out.Body.Path = result.LocalPath
+		out.Body.RemoteKeys = result.RemoteKeys
 		return out, nil
 	})
 
