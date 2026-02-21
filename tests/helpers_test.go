@@ -148,6 +148,7 @@ func startBackendWithDB(t *testing.T, dbPath string, masterKey []byte) *testBack
 		server:  httpServer,
 		store:   store,
 		dataDir: filepath.Dir(dbPath),
+		dbPath:  dbPath,
 	}
 
 	for i := 0; i < 50; i++ {

@@ -6,8 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strconv"
 	"time"
+
+	ff "github.com/peterbourgon/ff/v3"
 )
 
 // Config holds all server configuration.
@@ -76,221 +77,93 @@ type Config struct {
 	// Logging.
 	LogFormat string // "json" (default) or "text"
 	AuditLogs bool   // enable audit logging (default true)
+
+	// Secrets key migration (re-wrap DEKs from old to new provider, then exit).
+	MigrateSecretsKey  bool   // --migrate-secrets-key
+	OldSecretsProvider string // --old-secrets-provider (local or gcpkms)
+	OldMasterKey       string // --old-master-key (hex key for old local provider)
+	OldKMSKey          string // --old-kms-key (KMS resource name for old provider)
 }
 
 func Parse() *Config {
 	c := &Config{}
-	flag.StringVar(&c.Addr, "addr", ":8080", "listen address")
-	flag.StringVar(&c.DBPath, "db", "pulumi-backend.db", "SQLite database path")
-	flag.StringVar(&c.MasterKey, "master-key", "", "hex-encoded 32-byte master key for secrets (auto-generated if empty)")
-	flag.BoolVar(&c.TLS, "tls", false, "enable TLS")
-	flag.StringVar(&c.CertFile, "cert", "", "TLS certificate file")
-	flag.StringVar(&c.KeyFile, "key", "", "TLS key file")
-	flag.StringVar(&c.DefaultOrg, "org", "organization", "default organization name")
-	flag.StringVar(&c.DefaultUser, "user", "admin", "default user name")
+	fs := flag.NewFlagSet("pulumi-backend", flag.ExitOnError)
+
+	// Core flags.
+	fs.StringVar(&c.Addr, "addr", ":8080", "listen address")
+	fs.StringVar(&c.DBPath, "db", "pulumi-backend.db", "SQLite database path")
+	fs.StringVar(&c.MasterKey, "master-key", "", "hex-encoded 32-byte master key for secrets (auto-generated if empty)")
+	fs.BoolVar(&c.TLS, "tls", false, "enable TLS")
+	fs.StringVar(&c.CertFile, "cert", "", "TLS certificate file")
+	fs.StringVar(&c.KeyFile, "key", "", "TLS key file")
+	fs.StringVar(&c.DefaultOrg, "org", "organization", "default organization name")
+	fs.StringVar(&c.DefaultUser, "user", "admin", "default user name")
 
 	// Tuning flags.
-	flag.DurationVar(&c.LeaseDuration, "lease-duration", 5*time.Minute, "update lease TTL")
-	flag.IntVar(&c.CacheSize, "cache-size", 256, "LRU cache size for deployment snapshots")
-	flag.IntVar(&c.DeltaCutoffBytes, "delta-cutoff", 1024*1024, "checkpoint size threshold for delta mode (bytes)")
-	flag.IntVar(&c.HistoryPageSize, "history-page-size", 10, "default page size for update history")
-	flag.IntVar(&c.MaxStateVersions, "max-state-versions", 50, "max state versions kept per stack (0 = unlimited)")
-	flag.IntVar(&c.StackListPageSize, "stack-list-page-size", 100, "page size for stack listings")
+	fs.DurationVar(&c.LeaseDuration, "lease-duration", 5*time.Minute, "update lease TTL")
+	fs.IntVar(&c.CacheSize, "cache-size", 256, "LRU cache size for deployment snapshots")
+	fs.IntVar(&c.DeltaCutoffBytes, "delta-cutoff", 1024*1024, "checkpoint size threshold for delta mode (bytes)")
+	fs.IntVar(&c.HistoryPageSize, "history-page-size", 10, "default page size for update history")
+	fs.IntVar(&c.MaxStateVersions, "max-state-versions", 50, "max state versions kept per stack (0 = unlimited)")
+	fs.IntVar(&c.StackListPageSize, "stack-list-page-size", 100, "page size for stack listings")
 
 	// Async event flags.
-	flag.IntVar(&c.EventBufferSize, "event-buffer-size", 1000, "max buffered events before forced flush")
-	flag.DurationVar(&c.EventFlushInterval, "event-flush-interval", time.Second, "periodic event flush interval")
+	fs.IntVar(&c.EventBufferSize, "event-buffer-size", 1000, "max buffered events before forced flush")
+	fs.DurationVar(&c.EventFlushInterval, "event-flush-interval", time.Second, "periodic event flush interval")
 
 	// Backup flags.
-	flag.StringVar(&c.BackupDir, "backup-dir", "", "directory for database backups (empty = disabled)")
+	fs.StringVar(&c.BackupDir, "backup-dir", "", "directory for database backups (empty = disabled)")
 
 	// Secrets provider flags.
-	flag.StringVar(&c.SecretsProvider, "secrets-provider", "local", "secrets provider: local or gcpkms")
-	flag.StringVar(&c.KMSKeyResourceName, "kms-key", "", "GCP KMS key resource name (required for gcpkms provider)")
+	fs.StringVar(&c.SecretsProvider, "secrets-provider", "local", "secrets provider: local or gcpkms")
+	fs.StringVar(&c.KMSKeyResourceName, "kms-key", "", "GCP KMS key resource name (required for gcpkms provider)")
 
 	// Auth flags.
-	flag.StringVar(&c.AuthMode, "auth-mode", "single-tenant", "authentication mode: single-tenant, google, oidc, or jwt")
-	flag.StringVar(&c.GoogleClientID, "google-client-id", "", "Google OAuth2 client ID for JWT verification")
-	flag.StringVar(&c.GoogleSAKeyFile, "google-sa-key", "", "optional path to SA JSON key for Admin SDK")
-	flag.StringVar(&c.GoogleSAEmail, "google-sa-email", "", "SA email for keyless DWD via IAM impersonation")
-	flag.StringVar(&c.GoogleAdminEmail, "google-admin-email", "", "Workspace super-admin email for DWD subject")
-	flag.StringVar(&c.GoogleClientSecret, "google-client-secret", "", "Google OAuth2 client secret (required for browser login)")
-	flag.StringVar(&c.GoogleAllowedDomains, "google-allowed-domains", "", "comma-separated allowed hosted domains")
-	flag.BoolVar(&c.GoogleTransitiveGroups, "google-transitive-groups", false, "resolve nested group memberships")
-	flag.DurationVar(&c.TokenTTL, "token-ttl", 24*time.Hour, "backend-issued token lifetime")
-	flag.DurationVar(&c.GroupsCacheTTL, "groups-cache-ttl", 5*time.Minute, "group membership cache TTL")
+	fs.StringVar(&c.AuthMode, "auth-mode", "single-tenant", "authentication mode: single-tenant, google, oidc, or jwt")
+	fs.StringVar(&c.GoogleClientID, "google-client-id", "", "Google OAuth2 client ID for JWT verification")
+	fs.StringVar(&c.GoogleSAKeyFile, "google-sa-key", "", "optional path to SA JSON key for Admin SDK")
+	fs.StringVar(&c.GoogleSAEmail, "google-sa-email", "", "SA email for keyless DWD via IAM impersonation")
+	fs.StringVar(&c.GoogleAdminEmail, "google-admin-email", "", "Workspace super-admin email for DWD subject")
+	fs.StringVar(&c.GoogleClientSecret, "google-client-secret", "", "Google OAuth2 client secret (required for browser login)")
+	fs.StringVar(&c.GoogleAllowedDomains, "google-allowed-domains", "", "comma-separated allowed hosted domains")
+	fs.BoolVar(&c.GoogleTransitiveGroups, "google-transitive-groups", false, "resolve nested group memberships")
+	fs.DurationVar(&c.TokenTTL, "token-ttl", 24*time.Hour, "backend-issued token lifetime")
+	fs.DurationVar(&c.GroupsCacheTTL, "groups-cache-ttl", 5*time.Minute, "group membership cache TTL")
 	// Generic OIDC flags.
-	flag.StringVar(&c.OIDCIssuer, "oidc-issuer", "", "OIDC provider discovery URL (required for oidc mode)")
-	flag.StringVar(&c.OIDCClientID, "oidc-client-id", "", "OIDC OAuth2 client ID")
-	flag.StringVar(&c.OIDCClientSecret, "oidc-client-secret", "", "OIDC OAuth2 client secret")
-	flag.StringVar(&c.OIDCAllowedDomains, "oidc-allowed-domains", "", "comma-separated allowed email domains")
-	flag.StringVar(&c.OIDCScopes, "oidc-scopes", "profile,email", "additional OIDC scopes beyond openid")
-	flag.StringVar(&c.OIDCGroupsClaim, "oidc-groups-claim", "groups", "OIDC claim key for group memberships")
-	flag.StringVar(&c.OIDCUsernameClaim, "oidc-username-claim", "email", "OIDC claim key for username")
-	flag.StringVar(&c.OIDCProviderName, "oidc-provider-name", "SSO", "display name for login page")
+	fs.StringVar(&c.OIDCIssuer, "oidc-issuer", "", "OIDC provider discovery URL (required for oidc mode)")
+	fs.StringVar(&c.OIDCClientID, "oidc-client-id", "", "OIDC OAuth2 client ID")
+	fs.StringVar(&c.OIDCClientSecret, "oidc-client-secret", "", "OIDC OAuth2 client secret")
+	fs.StringVar(&c.OIDCAllowedDomains, "oidc-allowed-domains", "", "comma-separated allowed email domains")
+	fs.StringVar(&c.OIDCScopes, "oidc-scopes", "profile,email", "additional OIDC scopes beyond openid")
+	fs.StringVar(&c.OIDCGroupsClaim, "oidc-groups-claim", "groups", "OIDC claim key for group memberships")
+	fs.StringVar(&c.OIDCUsernameClaim, "oidc-username-claim", "email", "OIDC claim key for username")
+	fs.StringVar(&c.OIDCProviderName, "oidc-provider-name", "SSO", "display name for login page")
 	// JWT auth flags.
-	flag.StringVar(&c.JWTSigningKey, "jwt-signing-key", "", "HMAC secret or path to PEM public key for JWT verification")
-	flag.StringVar(&c.JWTIssuer, "jwt-issuer", "", "expected JWT issuer claim (optional)")
-	flag.StringVar(&c.JWTAudience, "jwt-audience", "", "expected JWT audience claim (optional)")
-	flag.StringVar(&c.JWTGroupsClaim, "jwt-groups-claim", "groups", "JWT claim name for group memberships")
-	flag.StringVar(&c.JWTUsernameClaim, "jwt-username-claim", "sub", "JWT claim for username (sub or email)")
-	flag.StringVar(&c.RBACConfigPath, "rbac-config", "", "path to rbac.yaml (empty = all users are admin)")
+	fs.StringVar(&c.JWTSigningKey, "jwt-signing-key", "", "HMAC secret or path to PEM public key for JWT verification")
+	fs.StringVar(&c.JWTIssuer, "jwt-issuer", "", "expected JWT issuer claim (optional)")
+	fs.StringVar(&c.JWTAudience, "jwt-audience", "", "expected JWT audience claim (optional)")
+	fs.StringVar(&c.JWTGroupsClaim, "jwt-groups-claim", "groups", "JWT claim name for group memberships")
+	fs.StringVar(&c.JWTUsernameClaim, "jwt-username-claim", "sub", "JWT claim for username (sub or email)")
+	fs.StringVar(&c.RBACConfigPath, "rbac-config", "", "path to rbac.yaml (empty = all users are admin)")
 
 	// Logging flags.
-	flag.StringVar(&c.LogFormat, "log-format", "json", "log format: json or text")
-	flag.BoolVar(&c.AuditLogs, "audit-logs", true, "enable structured audit logging")
+	fs.StringVar(&c.LogFormat, "log-format", "json", "log format: json or text")
+	fs.BoolVar(&c.AuditLogs, "audit-logs", true, "enable structured audit logging")
 
-	flag.Parse()
+	// Secrets key migration flags.
+	fs.BoolVar(&c.MigrateSecretsKey, "migrate-secrets-key", false, "re-wrap all DEKs from old to new provider, then exit")
+	fs.StringVar(&c.OldSecretsProvider, "old-secrets-provider", "", "previous secrets provider: local or gcpkms (for --migrate-secrets-key)")
+	fs.StringVar(&c.OldMasterKey, "old-master-key", "", "previous hex-encoded master key (for --migrate-secrets-key with local)")
+	fs.StringVar(&c.OldKMSKey, "old-kms-key", "", "previous GCP KMS key resource name (for --migrate-secrets-key with gcpkms)")
 
-	// Allow env overrides.
-	if v := os.Getenv("PULUMI_BACKEND_ADDR"); v != "" {
-		c.Addr = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_DB"); v != "" {
-		c.DBPath = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_MASTER_KEY"); v != "" {
-		c.MasterKey = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_ORG"); v != "" {
-		c.DefaultOrg = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_USER"); v != "" {
-		c.DefaultUser = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_LEASE_DURATION"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			c.LeaseDuration = d
-		}
-	}
-	if v := os.Getenv("PULUMI_BACKEND_CACHE_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.CacheSize = n
-		}
-	}
-	if v := os.Getenv("PULUMI_BACKEND_DELTA_CUTOFF"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.DeltaCutoffBytes = n
-		}
-	}
-	if v := os.Getenv("PULUMI_BACKEND_HISTORY_PAGE_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.HistoryPageSize = n
-		}
-	}
-	if v := os.Getenv("PULUMI_BACKEND_MAX_STATE_VERSIONS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.MaxStateVersions = n
-		}
-	}
-	if v := os.Getenv("PULUMI_BACKEND_STACK_LIST_PAGE_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.StackListPageSize = n
-		}
-	}
-	if v := os.Getenv("PULUMI_BACKEND_EVENT_BUFFER_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.EventBufferSize = n
-		}
-	}
-	if v := os.Getenv("PULUMI_BACKEND_EVENT_FLUSH_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			c.EventFlushInterval = d
-		}
-	}
-	if v := os.Getenv("PULUMI_BACKEND_BACKUP_DIR"); v != "" {
-		c.BackupDir = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_SECRETS_PROVIDER"); v != "" {
-		c.SecretsProvider = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_KMS_KEY"); v != "" {
-		c.KMSKeyResourceName = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_AUTH_MODE"); v != "" {
-		c.AuthMode = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_CLIENT_ID"); v != "" {
-		c.GoogleClientID = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_SA_KEY"); v != "" {
-		c.GoogleSAKeyFile = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_SA_EMAIL"); v != "" {
-		c.GoogleSAEmail = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_ADMIN_EMAIL"); v != "" {
-		c.GoogleAdminEmail = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_CLIENT_SECRET"); v != "" {
-		c.GoogleClientSecret = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_ALLOWED_DOMAINS"); v != "" {
-		c.GoogleAllowedDomains = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_GOOGLE_TRANSITIVE_GROUPS"); v == "true" {
-		c.GoogleTransitiveGroups = true
-	}
-	if v := os.Getenv("PULUMI_BACKEND_TOKEN_TTL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			c.TokenTTL = d
-		}
-	}
-	if v := os.Getenv("PULUMI_BACKEND_GROUPS_CACHE_TTL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			c.GroupsCacheTTL = d
-		}
-	}
-	if v := os.Getenv("PULUMI_BACKEND_OIDC_ISSUER"); v != "" {
-		c.OIDCIssuer = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_OIDC_CLIENT_ID"); v != "" {
-		c.OIDCClientID = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_OIDC_CLIENT_SECRET"); v != "" {
-		c.OIDCClientSecret = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_OIDC_ALLOWED_DOMAINS"); v != "" {
-		c.OIDCAllowedDomains = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_OIDC_SCOPES"); v != "" {
-		c.OIDCScopes = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_OIDC_GROUPS_CLAIM"); v != "" {
-		c.OIDCGroupsClaim = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_OIDC_USERNAME_CLAIM"); v != "" {
-		c.OIDCUsernameClaim = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_OIDC_PROVIDER_NAME"); v != "" {
-		c.OIDCProviderName = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_JWT_SIGNING_KEY"); v != "" {
-		c.JWTSigningKey = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_JWT_ISSUER"); v != "" {
-		c.JWTIssuer = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_JWT_AUDIENCE"); v != "" {
-		c.JWTAudience = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_JWT_GROUPS_CLAIM"); v != "" {
-		c.JWTGroupsClaim = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_JWT_USERNAME_CLAIM"); v != "" {
-		c.JWTUsernameClaim = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_RBAC_CONFIG"); v != "" {
-		c.RBACConfigPath = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_LOG_FORMAT"); v != "" {
-		c.LogFormat = v
-	}
-	if v := os.Getenv("PULUMI_BACKEND_AUDIT_LOGS"); v == "false" {
-		c.AuditLogs = false
+	// Parse flags and env vars (flag > env > default).
+	if err := ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("PULUMI_BACKEND")); err != nil {
+		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		os.Exit(1)
 	}
 
-	if c.MasterKey == "" && c.SecretsProvider == "local" {
+	// Auto-generate master key if not provided (local secrets provider only, non-migration mode).
+	if c.MasterKey == "" && c.SecretsProvider == "local" && !c.MigrateSecretsKey {
 		key := make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to generate master key: %v\n", err)

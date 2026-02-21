@@ -49,37 +49,52 @@ func main() {
 	}
 
 	// Create secrets provider.
-	var secretsProvider engine.SecretsProvider
-	switch cfg.SecretsProvider {
-	case "gcpkms":
-		if cfg.KMSKeyResourceName == "" {
-			fmt.Fprintf(os.Stderr, "GCP KMS key resource name is required when secrets-provider=gcpkms\n")
-			os.Exit(1)
-		}
-		kmsProvider, err := engine.NewKMSSecretsProvider(context.Background(), cfg.KMSKeyResourceName)
+	secretsProvider := createSecretsProvider(cfg)
+	if closer, ok := secretsProvider.(interface{ Close() error }); ok {
+		defer closer.Close()
+	}
+
+	// Secrets key migration: re-wrap all per-stack DEKs from old to new provider, then exit.
+	if cfg.MigrateSecretsKey {
+		oldProvider, err := buildOldSecretsProvider(cfg)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to create KMS secrets provider: %v\n", err)
+			fmt.Fprintf(os.Stderr, "failed to build old secrets provider: %v\n", err)
 			os.Exit(1)
 		}
-		defer kmsProvider.Close()
-		secretsProvider = kmsProvider
-		slog.Info("secrets provider: GCP KMS", "key", cfg.KMSKeyResourceName)
-	default: // "local"
-		masterKey, err := cfg.MasterKeyBytes()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid master key: %v\n", err)
+		if closer, ok := oldProvider.(interface{ Close() error }); ok {
+			defer closer.Close()
+		}
+
+		// Verify the old provider can decrypt the existing canary.
+		if err := verifySecretsProvider(store, oldProvider); err != nil {
+			fmt.Fprintf(os.Stderr, "old secrets provider verification failed (cannot decrypt existing data): %v\n", err)
 			os.Exit(1)
 		}
-		localProvider, err := engine.NewLocalSecretsProvider(masterKey)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to create local secrets provider: %v\n", err)
+
+		if err := migrateSecretsKeys(store, oldProvider, secretsProvider); err != nil {
+			fmt.Fprintf(os.Stderr, "secrets key migration failed: %v\n", err)
 			os.Exit(1)
 		}
-		if err := verifyMasterKey(store, localProvider); err != nil {
-			fmt.Fprintf(os.Stderr, "master key verification failed: %v\n", err)
+
+		// Replace canary with new provider.
+		if err := store.SetConfig(context.Background(), "secrets_canary", ""); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to clear old canary: %v\n", err)
 			os.Exit(1)
 		}
-		secretsProvider = localProvider
+		if err := verifySecretsProvider(store, secretsProvider); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to store new canary: %v\n", err)
+			os.Exit(1)
+		}
+
+		slog.Info("secrets key migration complete")
+		store.Close()
+		os.Exit(0)
+	}
+
+	// Verify the secrets provider can decrypt existing data (canary check).
+	if err := verifySecretsProvider(store, secretsProvider); err != nil {
+		fmt.Fprintf(os.Stderr, "secrets provider verification failed: %v\n", err)
+		os.Exit(1)
 	}
 
 	secrets := engine.NewSecretsEngine(secretsProvider)
@@ -292,17 +307,47 @@ func main() {
 	slog.Info("shutdown complete")
 }
 
-// canaryPlaintext is a known value used to verify the master key on startup.
-const canaryPlaintext = "pulumi-backend-master-key-canary"
+// createSecretsProvider builds the secrets provider from config. Exits on error.
+func createSecretsProvider(cfg *config.Config) engine.SecretsProvider {
+	switch cfg.SecretsProvider {
+	case "gcpkms":
+		if cfg.KMSKeyResourceName == "" {
+			fmt.Fprintf(os.Stderr, "GCP KMS key resource name is required when secrets-provider=gcpkms\n")
+			os.Exit(1)
+		}
+		kmsProvider, err := engine.NewKMSSecretsProvider(context.Background(), cfg.KMSKeyResourceName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create KMS secrets provider: %v\n", err)
+			os.Exit(1)
+		}
+		slog.Info("secrets provider: GCP KMS", "key", cfg.KMSKeyResourceName)
+		return kmsProvider
+	default: // "local"
+		masterKey, err := cfg.MasterKeyBytes()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid master key: %v\n", err)
+			os.Exit(1)
+		}
+		localProvider, err := engine.NewLocalSecretsProvider(masterKey)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to create local secrets provider: %v\n", err)
+			os.Exit(1)
+		}
+		return localProvider
+	}
+}
 
-// verifyMasterKey checks that the current master key can decrypt a previously
-// stored canary value. On first run (no canary in DB), it creates one. On
-// subsequent runs, it verifies decryption succeeds — a mismatch means the
-// wrong key was provided, and all secrets would be undecryptable.
-func verifyMasterKey(store *storage.SQLiteStore, provider *engine.LocalSecretsProvider) error {
+// canaryPlaintext is a known value used to verify the secrets provider on startup.
+const canaryPlaintext = "pulumi-backend-secrets-canary"
+
+// verifySecretsProvider checks that the current secrets provider can decrypt a
+// previously stored canary value. On first run (no canary in DB), it creates
+// one. On subsequent runs, it verifies decryption succeeds — a mismatch means
+// the wrong key/KMS was provided, and all secrets would be undecryptable.
+func verifySecretsProvider(store *storage.SQLiteStore, provider engine.SecretsProvider) error {
 	ctx := context.Background()
 
-	storedCanary, err := store.GetConfig(ctx, "master_key_canary")
+	storedCanary, err := store.GetConfig(ctx, "secrets_canary")
 	if err != nil {
 		return fmt.Errorf("read canary from database: %w", err)
 	}
@@ -314,24 +359,93 @@ func verifyMasterKey(store *storage.SQLiteStore, provider *engine.LocalSecretsPr
 			return fmt.Errorf("encrypt canary: %w", err)
 		}
 		canaryHex := hex.EncodeToString(ciphertext)
-		if err := store.SetConfig(ctx, "master_key_canary", canaryHex); err != nil {
+		if err := store.SetConfig(ctx, "secrets_canary", canaryHex); err != nil {
 			return fmt.Errorf("store canary in database: %w", err)
 		}
-		slog.Info("master key canary stored (first run)")
+		slog.Info("secrets provider canary stored", "provider", provider.ProviderName())
 		return nil
 	}
 
-	// Subsequent run — verify the key can decrypt the canary.
+	// Subsequent run — verify the provider can decrypt the canary.
 	ciphertext, err := hex.DecodeString(storedCanary)
 	if err != nil {
 		return fmt.Errorf("decode stored canary: %w", err)
 	}
 	plaintext, err := provider.UnwrapKey(ctx, ciphertext)
 	if err != nil {
-		return errors.New("wrong master key: cannot decrypt verification canary (did the key change?)")
+		return fmt.Errorf("wrong secrets key: cannot decrypt verification canary (%s provider, did the key change?)", provider.ProviderName())
 	}
 	if string(plaintext) != canaryPlaintext {
-		return errors.New("master key canary mismatch: decrypted value does not match expected canary")
+		return errors.New("secrets canary mismatch: decrypted value does not match expected canary")
+	}
+
+	return nil
+}
+
+// buildOldSecretsProvider constructs a SecretsProvider from the --old-* flags.
+func buildOldSecretsProvider(cfg *config.Config) (engine.SecretsProvider, error) {
+	switch cfg.OldSecretsProvider {
+	case "gcpkms":
+		if cfg.OldKMSKey == "" {
+			return nil, errors.New("--old-kms-key is required when --old-secrets-provider=gcpkms")
+		}
+		return engine.NewKMSSecretsProvider(context.Background(), cfg.OldKMSKey)
+	case "local":
+		if cfg.OldMasterKey == "" {
+			return nil, errors.New("--old-master-key is required when --old-secrets-provider=local")
+		}
+		key, err := hex.DecodeString(cfg.OldMasterKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --old-master-key: %w", err)
+		}
+		return engine.NewLocalSecretsProvider(key)
+	default:
+		return nil, fmt.Errorf("--old-secrets-provider must be 'local' or 'gcpkms', got %q", cfg.OldSecretsProvider)
+	}
+}
+
+// migrateSecretsKeys re-wraps all per-stack DEKs from oldProvider to newProvider.
+func migrateSecretsKeys(store *storage.SQLiteStore, oldProvider, newProvider engine.SecretsProvider) error {
+	ctx := context.Background()
+
+	keys, err := store.ListSecretsKeys(ctx)
+	if err != nil {
+		return fmt.Errorf("list secrets keys: %w", err)
+	}
+
+	if len(keys) == 0 {
+		slog.Info("no secrets keys to migrate")
+		return nil
+	}
+
+	slog.Info("migrating secrets keys",
+		"count", len(keys),
+		"from", oldProvider.ProviderName(),
+		"to", newProvider.ProviderName(),
+	)
+
+	for i, entry := range keys {
+		// Unwrap with old provider.
+		rawDEK, err := oldProvider.UnwrapKey(ctx, entry.EncryptedKey)
+		if err != nil {
+			return fmt.Errorf("unwrap key for %s/%s/%s: %w", entry.OrgName, entry.ProjectName, entry.StackName, err)
+		}
+
+		// Re-wrap with new provider.
+		newWrapped, err := newProvider.WrapKey(ctx, rawDEK)
+		if err != nil {
+			return fmt.Errorf("wrap key for %s/%s/%s: %w", entry.OrgName, entry.ProjectName, entry.StackName, err)
+		}
+
+		// Save the re-wrapped key.
+		if err := store.SaveSecretsKey(ctx, entry.OrgName, entry.ProjectName, entry.StackName, newWrapped); err != nil {
+			return fmt.Errorf("save key for %s/%s/%s: %w", entry.OrgName, entry.ProjectName, entry.StackName, err)
+		}
+
+		slog.Info("migrated secrets key",
+			"stack", fmt.Sprintf("%s/%s/%s", entry.OrgName, entry.ProjectName, entry.StackName),
+			"progress", fmt.Sprintf("%d/%d", i+1, len(keys)),
+		)
 	}
 
 	return nil

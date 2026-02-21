@@ -91,6 +91,14 @@ type Token struct {
 	ExpiresAt    *time.Time
 }
 
+// SecretsKeyEntry holds a wrapped DEK for a single stack (used by migration).
+type SecretsKeyEntry struct {
+	OrgName      string
+	ProjectName  string
+	StackName    string
+	EncryptedKey []byte
+}
+
 // Store is the storage interface for the backend.
 type Store interface {
 	// Lifecycle
@@ -150,6 +158,7 @@ type Store interface {
 	// Secrets keys
 	SaveSecretsKey(ctx context.Context, org, project, stack string, encryptedKey []byte) error
 	GetSecretsKey(ctx context.Context, org, project, stack string) ([]byte, error)
+	ListSecretsKeys(ctx context.Context) ([]SecretsKeyEntry, error)
 
 	// Server config (key-value metadata, e.g. master encryption key).
 	GetConfig(ctx context.Context, key string) (string, error)

@@ -1020,3 +1020,21 @@ func (s *SQLiteStore) GetSecretsKey(ctx context.Context, org, project, stack str
 	}
 	return key, err
 }
+
+func (s *SQLiteStore) ListSecretsKeys(ctx context.Context) ([]SecretsKeyEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT org_name, project_name, stack_name, encryption_key FROM secrets_keys`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []SecretsKeyEntry
+	for rows.Next() {
+		var e SecretsKeyEntry
+		if err := rows.Scan(&e.OrgName, &e.ProjectName, &e.StackName, &e.EncryptedKey); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
+}

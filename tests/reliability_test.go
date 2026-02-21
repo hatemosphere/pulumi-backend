@@ -1,11 +1,13 @@
 package tests
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -2084,6 +2086,105 @@ func TestReliability_MasterKeyPersistence(t *testing.T) {
 	httpJSON(t, resp, &decResp)
 	if decResp.Plaintext != plaintext {
 		t.Fatalf("expected plaintext %q after restart, got %q", plaintext, decResp.Plaintext)
+	}
+}
+
+func TestReliability_SecretsKeyMigration(t *testing.T) {
+	// Start backend with key A, create a stack, encrypt a value.
+	keyA := make([]byte, 32)
+	keyA[0] = 0xAA
+	tb1 := startBackendWithDB(t, filepath.Join(t.TempDir(), "migrate.db"), keyA)
+
+	rCreateStack(t, tb1, "rel-migrate", "dev")
+	rRunFullUpdate(t, tb1, "rel-migrate", "dev", rMakeDeployment("initial"))
+
+	plaintext := "c2VjcmV0LXZhbHVl" // base64("secret-value")
+	resp := tb1.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-migrate/dev/encrypt", rOrg),
+		map[string]any{"plaintext": plaintext})
+	var encResp struct {
+		Ciphertext string `json:"ciphertext"`
+	}
+	httpJSON(t, resp, &encResp)
+	if encResp.Ciphertext == "" {
+		t.Fatal("expected non-empty ciphertext")
+	}
+
+	// Stop the first backend but keep the DB path.
+	dbPath := tb1.dbPath
+	_ = tb1.server.Close()
+	_ = tb1.store.Close()
+
+	// Perform migration at the storage level: re-wrap all DEKs from key A to key B.
+	keyB := make([]byte, 32)
+	keyB[0] = 0xBB
+
+	store, err := storage.NewSQLiteStore(dbPath, storage.SQLiteStoreConfig{})
+	if err != nil {
+		t.Fatalf("open store for migration: %v", err)
+	}
+
+	providerA, err := engine.NewLocalSecretsProvider(keyA)
+	if err != nil {
+		t.Fatalf("create provider A: %v", err)
+	}
+	providerB, err := engine.NewLocalSecretsProvider(keyB)
+	if err != nil {
+		t.Fatalf("create provider B: %v", err)
+	}
+
+	ctx := context.Background()
+	keys, err := store.ListSecretsKeys(ctx)
+	if err != nil {
+		t.Fatalf("list secrets keys: %v", err)
+	}
+	if len(keys) == 0 {
+		t.Fatal("expected at least one secrets key entry")
+	}
+
+	for _, entry := range keys {
+		rawDEK, err := providerA.UnwrapKey(ctx, entry.EncryptedKey)
+		if err != nil {
+			t.Fatalf("unwrap key for %s/%s/%s: %v", entry.OrgName, entry.ProjectName, entry.StackName, err)
+		}
+		newWrapped, err := providerB.WrapKey(ctx, rawDEK)
+		if err != nil {
+			t.Fatalf("wrap key for %s/%s/%s: %v", entry.OrgName, entry.ProjectName, entry.StackName, err)
+		}
+		if err := store.SaveSecretsKey(ctx, entry.OrgName, entry.ProjectName, entry.StackName, newWrapped); err != nil {
+			t.Fatalf("save key for %s/%s/%s: %v", entry.OrgName, entry.ProjectName, entry.StackName, err)
+		}
+	}
+
+	_ = store.Close()
+
+	// Start a new backend with key B against the same database.
+	tb2 := startBackendWithDB(t, dbPath, keyB)
+
+	// Decrypt the ciphertext — must succeed with the migrated key.
+	resp = tb2.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-migrate/dev/decrypt", rOrg),
+		map[string]any{"ciphertext": encResp.Ciphertext})
+	var decResp struct {
+		Plaintext string `json:"plaintext"`
+	}
+	httpJSON(t, resp, &decResp)
+	if decResp.Plaintext != plaintext {
+		t.Fatalf("expected plaintext %q after migration, got %q", plaintext, decResp.Plaintext)
+	}
+
+	// Also verify that decrypting with the OLD key A would fail:
+	// start yet another backend with key A — decrypt must not succeed.
+	_ = tb2.server.Close()
+	_ = tb2.store.Close()
+
+	tb3 := startBackendWithDB(t, dbPath, keyA)
+	resp = tb3.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-migrate/dev/decrypt", rOrg),
+		map[string]any{"ciphertext": encResp.Ciphertext})
+	resp.Body.Close()
+	if resp.StatusCode == 200 {
+		t.Fatal("expected decrypt to fail with old key after migration, but got 200")
 	}
 }
 
