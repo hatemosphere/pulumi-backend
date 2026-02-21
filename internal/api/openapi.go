@@ -24,6 +24,8 @@ func BuildOpenAPISpec() *openapi3.T {
 	api := humago.New(mux, newHumaConfig())
 
 	// Register all operations (this populates the OpenAPI spec).
+	// For spec generation, unconditionally register all endpoints
+	// (runtime gating is based on config, but the spec should be complete).
 	s.registerCapabilities(api)
 	s.registerUser(api)
 	s.registerStacks(api)
@@ -31,6 +33,8 @@ func BuildOpenAPISpec() *openapi3.T {
 	s.registerUpdates(api)
 	s.registerHistory(api)
 	s.registerAdmin(api)
+	s.registerUserTokens(api)
+	s.registerOrg(api)
 
 	// Downgrade from OpenAPI 3.1 to 3.0 for kin-openapi compatibility.
 	// Huma generates 3.1 (uses "type": ["string","null"]), but kin-openapi

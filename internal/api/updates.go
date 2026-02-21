@@ -3,17 +3,51 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/auth"
+	"github.com/hatemosphere/pulumi-backend/internal/engine"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
+
+var uuidPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// isConflictError returns true if err is an engine state-conflict sentinel.
+func isConflictError(err error) bool {
+	return errors.Is(err, engine.ErrUpdateNotInProgress) ||
+		errors.Is(err, engine.ErrStackHasActiveUpdate) ||
+		errors.Is(err, engine.ErrNoActiveUpdate)
+}
+
+// sanitizeError returns a client-safe error message.
+// Sentinel errors pass through. Internal errors are scrubbed of UUIDs and SQL details.
+func sanitizeError(err error) string {
+	if isConflictError(err) {
+		return err.Error()
+	}
+	msg := err.Error()
+	for _, indicator := range []string{
+		"UNIQUE constraint", "no such table", "database is locked",
+		"SQLITE_", "sql:", "constraint failed",
+	} {
+		if strings.Contains(msg, indicator) {
+			return "internal error"
+		}
+	}
+	if uuidPattern.MatchString(msg) {
+		return "internal error"
+	}
+	return msg
+}
 
 func (s *Server) registerUpdates(api huma.API) {
 	// --- Create update (4 kinds) ---
@@ -23,6 +57,7 @@ func (s *Server) registerUpdates(api huma.API) {
 			Method:      http.MethodPost,
 			Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/" + kind,
 			Tags:        []string{"Updates"},
+			Errors:      []int{409},
 		}, func(ctx context.Context, input *CreateUpdateInput) (*CreateUpdateOutput, error) {
 			// Extract config/metadata from raw body to preserve all fields
 			// (the typed Body is used only for OpenAPI schema generation).
@@ -35,7 +70,7 @@ func (s *Server) registerUpdates(api huma.API) {
 			}
 			result, err := s.engine.CreateUpdate(ctx, input.OrgName, input.ProjectName, input.StackName, kind, raw.Config, raw.Metadata)
 			if err != nil {
-				return nil, huma.NewError(http.StatusConflict, err.Error())
+				return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
 			}
 			out := &CreateUpdateOutput{}
 			out.Body.UpdateID = result.UpdateID
@@ -51,10 +86,11 @@ func (s *Server) registerUpdates(api huma.API) {
 		Method:      http.MethodPost,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}",
 		Tags:        []string{"Updates"},
+		Errors:      []int{409},
 	}, func(ctx context.Context, input *StartUpdateInput) (*StartUpdateOutput, error) {
 		result, err := s.engine.StartUpdate(ctx, input.UpdateID, input.Body.Tags, input.Body.JournalVersion)
 		if err != nil {
-			return nil, huma.NewError(http.StatusConflict, err.Error())
+			return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
 		}
 		out := &StartUpdateOutput{}
 		out.Body.Version = result.Version
@@ -70,10 +106,11 @@ func (s *Server) registerUpdates(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}",
 		Tags:        []string{"Updates"},
+		Errors:      []int{404},
 	}, func(ctx context.Context, input *GetUpdateStatusInput) (*GetUpdateStatusOutput, error) {
 		u, err := s.engine.GetUpdate(ctx, input.UpdateID)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		if u == nil {
 			return nil, huma.NewError(http.StatusNotFound, "update not found")
@@ -83,8 +120,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		out.Body.Status = u.Status
 		out.Body.Events = []any{}
 		if u.Status == "in-progress" || u.Status == "not-started" {
-			token := ""
-			out.Body.ContinuationToken = &token
+			out.Body.ContinuationToken = ptrString("")
 		}
 		return out, nil
 	})
@@ -96,10 +132,11 @@ func (s *Server) registerUpdates(api huma.API) {
 		Path:          "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/complete",
 		Tags:          []string{"Updates"},
 		DefaultStatus: 200,
+		Errors:        []int{409},
 	}, func(ctx context.Context, input *CompleteUpdateInput) (*struct{}, error) {
 		err := s.engine.CompleteUpdate(ctx, input.UpdateID, input.Body.Status, input.Body.Result)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, conflictOrInternalError(err)
 		}
 		return nil, nil
 	})
@@ -114,7 +151,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		duration := time.Duration(input.Body.Duration) * time.Second
 		result, err := s.engine.RenewLease(ctx, input.UpdateID, duration)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		out := &RenewLeaseOutput{}
 		out.Body.Token = result.Token
@@ -129,10 +166,11 @@ func (s *Server) registerUpdates(api huma.API) {
 		Path:          "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/cancel",
 		Tags:          []string{"Updates"},
 		DefaultStatus: 200,
+		Errors:        []int{409},
 	}, func(ctx context.Context, input *CancelUpdateInput) (*struct{}, error) {
 		err := s.engine.CancelUpdate(ctx, input.OrgName, input.ProjectName, input.StackName)
 		if err != nil {
-			return nil, huma.NewError(http.StatusConflict, err.Error())
+			return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
 		}
 		return nil, nil
 	})
@@ -146,6 +184,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		Tags:          []string{"Checkpoints"},
 		MaxBodyBytes:  64 << 20,
 		DefaultStatus: 200,
+		Errors:        []int{409},
 	}, func(ctx context.Context, input *PatchCheckpointInput) (*struct{}, error) {
 		if input.Body.IsInvalid {
 			return nil, nil
@@ -162,7 +201,7 @@ func (s *Server) registerUpdates(api huma.API) {
 
 		err := s.engine.SaveCheckpoint(ctx, input.UpdateID, full)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, conflictOrInternalError(err)
 		}
 		return nil, nil
 	})
@@ -174,10 +213,11 @@ func (s *Server) registerUpdates(api huma.API) {
 		Tags:          []string{"Checkpoints"},
 		MaxBodyBytes:  64 << 20,
 		DefaultStatus: 200,
+		Errors:        []int{409},
 	}, func(ctx context.Context, input *PatchCheckpointVerbatimInput) (*struct{}, error) {
 		err := s.engine.SaveCheckpoint(ctx, input.UpdateID, input.Body.UntypedDeployment)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, conflictOrInternalError(err)
 		}
 		return nil, nil
 	})
@@ -189,10 +229,11 @@ func (s *Server) registerUpdates(api huma.API) {
 		Tags:          []string{"Checkpoints"},
 		MaxBodyBytes:  64 << 20,
 		DefaultStatus: 200,
+		Errors:        []int{409},
 	}, func(ctx context.Context, input *PatchCheckpointDeltaInput) (*struct{}, error) {
 		err := s.engine.SaveCheckpointDelta(ctx, input.UpdateID, input.Body.CheckpointHash, input.Body.DeploymentDelta, input.Body.SequenceNumber)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, conflictOrInternalError(err)
 		}
 		return nil, nil
 	})
@@ -206,6 +247,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		Tags:          []string{"Journal"},
 		MaxBodyBytes:  16 << 20,
 		DefaultStatus: 200,
+		Errors:        []int{400},
 	}, func(ctx context.Context, input *SaveJournalEntriesInput) (*struct{}, error) {
 		var req struct {
 			Entries []json.RawMessage `json:"entries"`
@@ -216,7 +258,7 @@ func (s *Server) registerUpdates(api huma.API) {
 
 		err := s.engine.SaveJournalEntries(ctx, input.UpdateID, req.Entries)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		return nil, nil
 	})
@@ -231,14 +273,12 @@ func (s *Server) registerUpdates(api huma.API) {
 		MaxBodyBytes:  4 << 20,
 		DefaultStatus: 200,
 	}, func(ctx context.Context, input *PostEventInput) (*struct{}, error) {
-		// Copy RawBody: huma returns the underlying buffer to a pool after
-		// the handler returns, but SaveEngineEvents buffers events
-		// asynchronously, so we must own our own copy of the bytes.
-		event := make(json.RawMessage, len(input.RawBody))
-		copy(event, input.RawBody)
+		// Copy RawBody: huma pools the buffer, but SaveEngineEvents
+		// buffers events asynchronously beyond the handler lifetime.
+		event := copyBody(input.RawBody)
 		err := s.engine.SaveEngineEvents(ctx, input.UpdateID, []json.RawMessage{event})
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		return nil, nil
 	})
@@ -253,7 +293,7 @@ func (s *Server) registerUpdates(api huma.API) {
 	}, func(ctx context.Context, input *PostEventsBatchInput) (*struct{}, error) {
 		err := s.engine.SaveEngineEvents(ctx, input.UpdateID, input.Body.Events)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		return nil, nil
 	})
@@ -264,10 +304,11 @@ func (s *Server) registerUpdates(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/events",
 		Tags:        []string{"Events"},
+		Errors:      []int{404},
 	}, func(ctx context.Context, input *GetEventsInput) (*GetEventsOutput, error) {
 		u, err := s.engine.GetUpdate(ctx, input.UpdateID)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		if u == nil {
 			return nil, huma.NewError(http.StatusNotFound, "update not found")
@@ -280,7 +321,7 @@ func (s *Server) registerUpdates(api huma.API) {
 
 		events, err := s.engine.GetEngineEvents(ctx, input.UpdateID, offset, 100)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 
 		eventPayloads := make([]json.RawMessage, len(events))
@@ -293,8 +334,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		out.Body.Events = eventPayloads
 
 		if u.Status == "in-progress" || u.Status == "not-started" {
-			nextOffset := strconv.Itoa(offset + len(events))
-			out.Body.ContinuationToken = &nextOffset
+			out.Body.ContinuationToken = ptrString(strconv.Itoa(offset + len(events)))
 		}
 		return out, nil
 	})
@@ -339,7 +379,14 @@ func (s *Server) registerHistory(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/updates",
 		Tags:        []string{"History"},
+		Errors:      []int{400},
 	}, func(ctx context.Context, input *GetUpdatesInput) (*GetUpdatesOutput, error) {
+		if input.Page < 0 {
+			return nil, huma.NewError(http.StatusBadRequest, "Invalid 'page' value.")
+		}
+		if input.PageSize < 0 {
+			return nil, huma.NewError(http.StatusBadRequest, "Invalid 'pageSize' value.")
+		}
 		pageSize := input.PageSize
 		if pageSize <= 0 {
 			pageSize = s.historyPageSize
@@ -347,7 +394,7 @@ func (s *Server) registerHistory(api huma.API) {
 
 		history, err := s.engine.GetHistory(ctx, input.OrgName, input.ProjectName, input.StackName, pageSize, input.Page)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 
 		updates := make([]UpdateSummary, 0, len(history))
@@ -366,10 +413,11 @@ func (s *Server) registerHistory(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/updates/latest",
 		Tags:        []string{"History"},
+		Errors:      []int{404},
 	}, func(ctx context.Context, input *GetLatestUpdateInput) (*GetLatestUpdateOutput, error) {
 		history, err := s.engine.GetHistory(ctx, input.OrgName, input.ProjectName, input.StackName, 1, 0)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		if len(history) == 0 {
 			return nil, huma.NewError(http.StatusNotFound, "no updates found")
@@ -394,10 +442,11 @@ func (s *Server) registerHistory(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/updates/{version}",
 		Tags:        []string{"History"},
+		Errors:      []int{404},
 	}, func(ctx context.Context, input *GetUpdateByVersionInput) (*GetUpdateByVersionOutput, error) {
 		h, err := s.engine.GetHistoryByVersion(ctx, input.OrgName, input.ProjectName, input.StackName, input.Version)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		if h == nil {
 			return nil, huma.NewError(http.StatusNotFound, "update not found")
@@ -452,7 +501,7 @@ func (s *Server) registerAdmin(api huma.API) {
 		}
 		path, err := s.engine.Backup(ctx)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		out := &CreateBackupOutput{}
 		out.Body.Path = path
@@ -479,7 +528,7 @@ func (s *Server) registerAdminTokens(api huma.API) {
 
 		tokens, err := s.tokenStore.ListTokensByUser(ctx, input.UserName)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 
 		out := &ListUserTokensOutput{}
@@ -517,14 +566,15 @@ func (s *Server) registerAdminTokens(api huma.API) {
 		identity := auth.IdentityFromContext(ctx)
 		revoked, err := s.tokenStore.DeleteTokensByUser(ctx, input.UserName)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 
-		slog.Info("admin revoked user tokens",
-			"admin", identity.UserName,
-			"targetUser", input.UserName,
-			"revoked", revoked,
-		)
+		audit.Event{
+			Actor:      identity.UserName,
+			Action:     "revokeUserTokens",
+			TargetUser: input.UserName,
+			Extra:      []any{slog.Int64("revoked_count", revoked)},
+		}.Info("Audit Log: Token Revocation")
 
 		out := &RevokeUserTokensOutput{}
 		out.Body.Revoked = revoked

@@ -57,10 +57,11 @@ func (s *Server) registerStacks(api huma.API) {
 		Path:          "/api/stacks/{orgName}/{projectName}",
 		Tags:          []string{"Stacks"},
 		DefaultStatus: 200,
+		Errors:        []int{404},
 	}, func(ctx context.Context, input *ProjectExistsInput) (*struct{}, error) {
 		exists, err := s.engine.ProjectExists(ctx, input.OrgName, input.ProjectName)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		if !exists {
 			return nil, huma.NewError(http.StatusNotFound, "project not found")
@@ -74,6 +75,7 @@ func (s *Server) registerStacks(api huma.API) {
 		Method:      http.MethodPost,
 		Path:        "/api/stacks/{orgName}/{projectName}",
 		Tags:        []string{"Stacks"},
+		Errors:      []int{400, 409},
 	}, func(ctx context.Context, input *CreateStackInput) (*CreateStackOutput, error) {
 		if input.Body.StackName == "" {
 			return nil, huma.NewError(http.StatusBadRequest, "stackName is required")
@@ -87,7 +89,7 @@ func (s *Server) registerStacks(api huma.API) {
 
 		err := s.engine.CreateStack(ctx, input.OrgName, input.ProjectName, input.Body.StackName, nil)
 		if err != nil {
-			return nil, huma.NewError(http.StatusConflict, err.Error())
+			return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
 		}
 
 		return &CreateStackOutput{}, nil
@@ -99,10 +101,11 @@ func (s *Server) registerStacks(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}",
 		Tags:        []string{"Stacks"},
+		Errors:      []int{404},
 	}, func(ctx context.Context, input *GetStackInput) (*GetStackOutput, error) {
 		st, err := s.engine.GetStack(ctx, input.OrgName, input.ProjectName, input.StackName)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		if st == nil {
 			return nil, huma.NewError(http.StatusNotFound, "stack not found")
@@ -130,6 +133,7 @@ func (s *Server) registerStacks(api huma.API) {
 		Path:          "/api/stacks/{orgName}/{projectName}/{stackName}",
 		Tags:          []string{"Stacks"},
 		DefaultStatus: 204,
+		Errors:        []int{400},
 	}, func(ctx context.Context, input *DeleteStackInput) (*struct{}, error) {
 		err := s.engine.DeleteStack(ctx, input.OrgName, input.ProjectName, input.StackName, input.Force)
 		if err != nil {
@@ -145,10 +149,16 @@ func (s *Server) registerStacks(api huma.API) {
 		Path:          "/api/stacks/{orgName}/{projectName}/{stackName}/tags",
 		Tags:          []string{"Stacks"},
 		DefaultStatus: 204,
+		Errors:        []int{400},
 	}, func(ctx context.Context, input *UpdateStackTagsInput) (*struct{}, error) {
+		for key := range input.Body {
+			if key == "" {
+				return nil, huma.NewError(http.StatusBadRequest, "tag key must not be empty")
+			}
+		}
 		err := s.engine.UpdateStackTags(ctx, input.OrgName, input.ProjectName, input.StackName, input.Body)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		return nil, nil
 	})
@@ -160,6 +170,7 @@ func (s *Server) registerStacks(api huma.API) {
 		Path:          "/api/stacks/{orgName}/{projectName}/{stackName}/rename",
 		Tags:          []string{"Stacks"},
 		DefaultStatus: 204,
+		Errors:        []int{400, 409},
 	}, func(ctx context.Context, input *RenameStackInput) (*struct{}, error) {
 		if err := validateName(input.Body.NewName, "stack"); err != nil {
 			return nil, huma.NewError(http.StatusBadRequest, err.Error())
@@ -174,7 +185,10 @@ func (s *Server) registerStacks(api huma.API) {
 
 		err := s.engine.RenameStack(ctx, input.OrgName, input.ProjectName, input.StackName, newProject, input.Body.NewName)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			if strings.Contains(err.Error(), "already exists") {
+				return nil, huma.NewError(http.StatusConflict, "a stack with that name already exists")
+			}
+			return nil, internalError(err)
 		}
 		return nil, nil
 	})
@@ -185,6 +199,7 @@ func (s *Server) registerStacks(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/export",
 		Tags:        []string{"Stacks"},
+		Errors:      []int{404},
 	}, func(ctx context.Context, input *ExportStackInput) (*huma.StreamResponse, error) {
 		return s.exportStack(ctx, input.OrgName, input.ProjectName, input.StackName, nil)
 	})
@@ -195,6 +210,7 @@ func (s *Server) registerStacks(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/export/{version}",
 		Tags:        []string{"Stacks"},
+		Errors:      []int{400, 404},
 	}, func(ctx context.Context, input *ExportStackVersionInput) (*huma.StreamResponse, error) {
 		version := input.Version
 		return s.exportStack(ctx, input.OrgName, input.ProjectName, input.StackName, &version)
@@ -207,31 +223,33 @@ func (s *Server) registerStacks(api huma.API) {
 		Path:         "/api/stacks/{orgName}/{projectName}/{stackName}/import",
 		Tags:         []string{"Stacks"},
 		MaxBodyBytes: 64 << 20, // 64MB
+		Errors:       []int{400, 409},
 	}, func(ctx context.Context, input *ImportStackInput) (*ImportStackOutput, error) {
-		// Copy RawBody: huma returns the underlying buffer to a pool after
-		// the handler returns, but the engine caches deployment bytes in an
-		// LRU that outlives the request.
-		deployment := make(json.RawMessage, len(input.RawBody))
-		copy(deployment, input.RawBody)
+		if len(input.RawBody) == 0 {
+			return nil, huma.NewError(http.StatusBadRequest, "request body is required")
+		}
+		// Copy RawBody: huma pools the buffer, but the engine caches
+		// deployment bytes in an LRU that outlives the request.
+		deployment := copyBody(input.RawBody)
 
 		result, err := s.engine.CreateUpdate(ctx, input.OrgName, input.ProjectName, input.StackName, "import", nil, nil)
 		if err != nil {
-			return nil, huma.NewError(http.StatusConflict, err.Error())
+			return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
 		}
 
 		_, err = s.engine.StartUpdate(ctx, result.UpdateID, nil, 0)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 
 		err = s.engine.SaveCheckpoint(ctx, result.UpdateID, deployment)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 
 		err = s.engine.CompleteUpdate(ctx, result.UpdateID, "succeeded", json.RawMessage(`{}`))
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 
 		out := &ImportStackOutput{}
@@ -255,6 +273,7 @@ func (s *Server) registerStacks(api huma.API) {
 		Path:          "/api/stacks/{orgName}/{projectName}/{stackName}/config",
 		Tags:          []string{"Stacks"},
 		DefaultStatus: 200,
+		Errors:        []int{400},
 	}, func(ctx context.Context, input *UpdateStackConfigInput) (*struct{}, error) {
 		return nil, nil
 	})

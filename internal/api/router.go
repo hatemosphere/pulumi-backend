@@ -15,6 +15,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/klauspost/compress/gzip"
 
+	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/auth"
 	"github.com/hatemosphere/pulumi-backend/internal/engine"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
@@ -149,9 +150,9 @@ func (s *Server) Router() http.Handler {
 	publicAPI.UseMiddleware(metricsHumaMiddleware)
 	s.registerPublicRoutes(publicAPI)
 
-	// Browser login page (raw mux, serves HTML not JSON).
+	// Login routes (browser and CLI, served as HTML via StreamResponse).
 	if s.oidcAuth != nil {
-		s.registerLoginPage(mux)
+		s.registerLogin(publicAPI)
 	}
 
 	// Auth-protected API routes.
@@ -159,6 +160,7 @@ func (s *Server) Router() http.Handler {
 	api.UseMiddleware(metricsHumaMiddleware)
 	api.UseMiddleware(s.authHumaMiddleware(api))
 	api.UseMiddleware(s.rbacMiddleware(api))
+	api.UseMiddleware(auditHumaMiddleware)
 	s.humaAPI = api
 
 	// Register huma operations.
@@ -169,6 +171,10 @@ func (s *Server) Router() http.Handler {
 	s.registerUpdates(api)
 	s.registerHistory(api)
 	s.registerAdmin(api)
+	if s.tokenStore != nil {
+		s.registerUserTokens(api)
+	}
+	s.registerOrg(api)
 
 	// HTTP-level middleware (outermost applied last).
 	var handler http.Handler = mux
@@ -448,6 +454,77 @@ func metricsHumaMiddleware(ctx huma.Context, next func(huma.Context)) {
 
 	httpRequestsTotal.WithLabelValues(ctx.Method(), route, strconv.Itoa(status)).Inc()
 	httpRequestDuration.WithLabelValues(ctx.Method(), route).Observe(elapsed.Seconds())
+}
+
+// auditExcludedOps lists high-frequency machine-generated operations that are
+// excluded from audit logging to avoid log flooding during pulumi up/preview.
+var auditExcludedOps = map[string]struct{}{
+	"patchCheckpoint":         {},
+	"patchCheckpointVerbatim": {},
+	"patchCheckpointDelta":    {},
+	"saveJournalEntries":      {},
+	"renewLease":              {},
+	"postEvent":               {},
+	"postEventsBatch":         {},
+}
+
+// auditHumaMiddleware logs structured audit entries for state-mutating API
+// operations. It runs after rbacMiddleware, so auth identity is always available.
+func auditHumaMiddleware(ctx huma.Context, next func(huma.Context)) {
+	next(ctx)
+
+	// Only audit state-mutating methods.
+	method := ctx.Method()
+	if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
+		return
+	}
+
+	// Skip high-frequency machine-generated operations.
+	op := ctx.Operation()
+	if _, excluded := auditExcludedOps[op.OperationID]; excluded {
+		return
+	}
+
+	actor := "unknown"
+	if identity := auth.IdentityFromContext(ctx.Context()); identity != nil {
+		actor = identity.UserName
+	}
+
+	status := ctx.Status()
+	if status == 0 {
+		status = 200
+	}
+
+	e := audit.Event{
+		Actor:      actor,
+		Action:     op.OperationID,
+		Method:     method,
+		Resource:   buildAuditResource(ctx),
+		HTTPStatus: status,
+		IP:         ctx.RemoteAddr(),
+	}
+	if status >= 400 {
+		e.Warn("Audit Log: API Request")
+	} else {
+		e.Info("Audit Log: API Request")
+	}
+}
+
+// buildAuditResource constructs a resource identifier from huma path params.
+func buildAuditResource(ctx huma.Context) string {
+	org := ctx.Param("orgName")
+	if org == "" {
+		return ""
+	}
+	project := ctx.Param("projectName")
+	if project == "" {
+		return org
+	}
+	stack := ctx.Param("stackName")
+	if stack == "" {
+		return org + "/" + project
+	}
+	return org + "/" + project + "/" + stack
 }
 
 // requestLogger logs each HTTP request with method, path, status, and latency.

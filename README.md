@@ -110,11 +110,34 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 - Authentication (single-tenant, Google OIDC, generic OIDC, JWT)
 - Browser login page (`GET /login`) and automatic CLI login (`GET /cli-login`) with any OIDC provider
 - RBAC (group-based, with stack-level policy overrides)
+- User token self-service (`GET/POST/DELETE /api/user/tokens`)
 - Admin token management (`GET/DELETE /api/admin/tokens/{userName}`)
+- Read-only teams and roles (`GET /api/orgs/{orgName}/teams`, `GET /api/orgs/{orgName}/roles`)
 - OIDC refresh token re-validation (detects deactivated users mid-session)
+- Structured audit logging (actor, action, resource, IP for all mutating operations)
 - Prometheus metrics (`/metrics`)
 - OpenAPI 3.1 spec (`GET /api/openapi`)
 - Database backup (`POST /api/admin/backup`)
+
+## Audit logging
+
+All state-mutating API operations are logged as structured JSON to stdout with actor identity, action, resource, HTTP status, and client IP:
+
+```json
+{"time":"...","level":"INFO","msg":"Audit Log: API Request","audit":{"actor":"user@example.com","action":"deleteStack","method":"DELETE","resource":"myorg/myproject/dev","http_status":200,"ip_address":"10.0.0.1"}}
+```
+
+| Event | Level | Trigger |
+|---|---|---|
+| `Audit Log: API Request` | INFO/WARN | Every mutating auth-protected request (stack CRUD, updates, secrets, admin) |
+| `Audit Log: Login Success` | INFO | Browser/CLI OIDC login |
+| `Audit Log: Login Failed` | WARN | Failed OIDC login attempt |
+| `Audit Log: Access Denied` | WARN | RBAC permission denied |
+| `Audit Log: Token Exchange` | INFO | Successful OIDC token exchange |
+| `Audit Log: Token Exchange Failed` | WARN | Failed OIDC token exchange |
+| `Audit Log: Token Revocation` | INFO | Admin revokes user tokens |
+
+High-frequency machine-generated operations (checkpoints, journal entries, events, lease renewals) are excluded to avoid log flooding during `pulumi up`.
 
 ## Tests
 
@@ -122,6 +145,8 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 go test ./internal/...                                    # unit tests
 go test -timeout 120s ./tests/ -count=1                   # API + auth tests (CLI tests auto-skip if pulumi not in PATH)
 go test -v ./tests/ -run TestAPISpecSchemaCompliance       # OpenAPI spec compliance
+go test -v ./tests/ -run TestCLIErrorSemantics             # CLI error message compatibility
+go test -v ./tests/ -run TestDeclaredErrorCodes            # error code coverage + exercised
 go test -bench . -benchmem ./internal/engine               # engine benchmarks
 go test -timeout 600s ./tests/ -count=1                    # full suite (with pulumi in PATH)
 ```

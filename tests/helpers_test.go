@@ -3,14 +3,19 @@ package tests
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/hatemosphere/pulumi-backend/internal/api"
+	"github.com/hatemosphere/pulumi-backend/internal/engine"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
@@ -26,6 +31,73 @@ type testBackend struct {
 func startBackend(t *testing.T) *testBackend {
 	t.Helper()
 	return startBackendWithOpts(t)
+}
+
+// backendConfig allows customizing engine and storage configuration for tests.
+type backendConfig struct {
+	serverOpts    []api.ServerOption
+	engineConfig  engine.ManagerConfig
+	storageConfig storage.SQLiteStoreConfig
+}
+
+// startBackendWithConfig starts a backend with custom engine and storage config.
+func startBackendWithConfig(t *testing.T, cfg backendConfig) *testBackend {
+	t.Helper()
+
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "test.db")
+
+	store, err := storage.NewSQLiteStore(dbPath, cfg.storageConfig)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+
+	masterKey := make([]byte, 32)
+	provider, err := engine.NewLocalSecretsProvider(masterKey)
+	if err != nil {
+		t.Fatalf("failed to create secrets provider: %v", err)
+	}
+	secrets := engine.NewSecretsEngine(provider)
+
+	mgr, err := engine.NewManager(store, secrets, cfg.engineConfig)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	srv := api.NewServer(mgr, "organization", "test-user", cfg.serverOpts...)
+	router := srv.Router()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	httpServer := &http.Server{Handler: router, ReadHeaderTimeout: 10 * time.Second} //nolint:gosec // test server
+	go func() { _ = httpServer.Serve(listener) }()
+
+	tb := &testBackend{
+		URL:     fmt.Sprintf("http://127.0.0.1:%d", port),
+		server:  httpServer,
+		store:   store,
+		dataDir: dataDir,
+	}
+
+	// Wait for server to be ready.
+	for i := 0; i < 50; i++ {
+		resp, err := http.Get(tb.URL + "/")
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Cleanup(func() {
+		_ = httpServer.Close()
+		_ = store.Close()
+	})
+	return tb
 }
 
 // --- CLI helpers ---

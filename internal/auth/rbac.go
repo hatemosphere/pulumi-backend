@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/hatemosphere/pulumi-backend/internal/audit"
 )
 
 // RBACResolver resolves the effective permission for a user on a given stack.
@@ -30,6 +32,11 @@ func NewRBACResolver(config *RBACConfig) *RBACResolver {
 		config:            config,
 		defaultPermission: dp,
 	}
+}
+
+// Config returns the underlying RBAC configuration (may be nil if no config was loaded).
+func (r *RBACResolver) Config() *RBACConfig {
+	return r.config
 }
 
 // Resolve returns the highest permission the identity has on the specified stack.
@@ -120,16 +127,13 @@ func RequirePermission(ctx context.Context, resolver *RBACResolver, org, project
 		actor = identity.UserName
 	}
 
-	// Emit Idiomatic Audit Log for Access Denied.
-	slog.Warn("Audit Log: Access Denied",
-		slog.Group("audit",
-			slog.String("actor", actor),
-			slog.String("action", "access_stack_endpoint"),
-			slog.String("resource", org+"/"+project+"/"+stack),
-			slog.String("status", "denied"),
-			slog.String("reason", fmt.Sprintf("insufficient_permissions (require %s, have %s)", required, effective)),
-		),
-	)
+	audit.Event{
+		Actor:    actor,
+		Action:   "access_stack_endpoint",
+		Status:   "denied",
+		Resource: org + "/" + project + "/" + stack,
+		Reason:   fmt.Sprintf("insufficient_permissions (require %s, have %s)", required, effective),
+	}.Warn("Audit Log: Access Denied")
 
 	return huma.NewError(http.StatusForbidden,
 		fmt.Sprintf("insufficient permissions: require %s, have %s", required, effective))

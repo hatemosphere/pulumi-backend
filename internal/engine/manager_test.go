@@ -108,6 +108,7 @@ func TestSaveCheckpointDelta(t *testing.T) {
 		ProjectName: "proj",
 		StackName:   "stack",
 		Version:     1,
+		Status:      "in-progress",
 	}, nil)
 	store.On("GetCurrentState", ctx, "org", "proj", "stack").Return(&storage.StackState{
 		Version:    1,
@@ -132,7 +133,7 @@ func TestSaveCheckpointDelta_HashMismatch(t *testing.T) {
 
 	// Mock GetUpdate
 	store.On("GetUpdate", ctx, "up-1").Return(&storage.Update{
-		OrgName: "org", ProjectName: "proj", StackName: "stack", Version: 1,
+		OrgName: "org", ProjectName: "proj", StackName: "stack", Version: 1, Status: "in-progress",
 	}, nil)
 
 	// Mock GetState containing "abc"

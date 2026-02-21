@@ -1,7 +1,9 @@
 package tests
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -235,6 +237,9 @@ func TestAPISpecSchemaCompliance(t *testing.T) {
 			// Compare responses.
 			diffs = append(diffs, compareResponses(upstreamOp, ourOp)...)
 
+			// Compare error responses.
+			diffs = append(diffs, compareErrorResponses(upstreamOp, ourOp)...)
+
 			if len(diffs) > 0 {
 				totalDiffs += len(diffs)
 				fmt.Fprintf(&b, "  %s\n", endpoint)
@@ -250,13 +255,14 @@ func TestAPISpecSchemaCompliance(t *testing.T) {
 
 	// Categorized summary.
 	var (
-		singleTenant   int // Properties from multi-tenant/SaaS features
-		shapeMismatch  int // Response envelope/wrapper differences
-		typeMismatch   int // Type serialization differences (e.g., byte encoding)
-		missingRequest int // Request fields we don't parse
-		missingOptQP   int // Optional query params we don't support
-		extraProps     int // Properties we return that upstream doesn't define
-		otherGaps      int // Other functional gaps
+		singleTenant     int // Properties from multi-tenant/SaaS features
+		shapeMismatch    int // Response envelope/wrapper differences
+		typeMismatch     int // Type serialization differences (e.g., byte encoding)
+		missingRequest   int // Request fields we don't parse
+		missingOptQP     int // Optional query params we don't support
+		extraProps       int // Properties we return that upstream doesn't define
+		missingErrorResp int // Error response codes upstream defines but we don't
+		otherGaps        int // Other functional gaps
 	)
 	// Re-scan diffs for categorization.
 	for path, upstreamItem := range upstream.Paths.Map() {
@@ -276,8 +282,11 @@ func TestAPISpecSchemaCompliance(t *testing.T) {
 			allDiffs := compareParameters(upstreamOp, ourOp)
 			allDiffs = append(allDiffs, compareRequestBody(upstreamOp, ourOp)...)
 			allDiffs = append(allDiffs, compareResponses(upstreamOp, ourOp)...)
+			allDiffs = append(allDiffs, compareErrorResponses(upstreamOp, ourOp)...)
 			for _, d := range allDiffs {
 				switch {
+				case strings.Contains(d, "[error-response]"):
+					missingErrorResp++
 				case strings.Contains(d, "missing (optional) query"):
 					missingOptQP++
 				case strings.Contains(d, "type mismatch"):
@@ -311,6 +320,7 @@ func TestAPISpecSchemaCompliance(t *testing.T) {
 	fmt.Fprintf(&b, "  Type mismatches:                    %d\n", typeMismatch)
 	fmt.Fprintf(&b, "  Response shape mismatches:          %d\n", shapeMismatch)
 	fmt.Fprintf(&b, "  Extra properties (ours only):       %d\n", extraProps)
+	fmt.Fprintf(&b, "  Missing error responses:            %d\n", missingErrorResp)
 	fmt.Fprintf(&b, "  Other gaps:                         %d\n", otherGaps)
 
 	t.Log(b.String())
@@ -467,6 +477,34 @@ func compareResponses(upstream, ours *openapi3.Operation) []string {
 	}
 
 	diffs = append(diffs, compareSchemas(upSchema, ourSchema, "response")...)
+	return diffs
+}
+
+// compareErrorResponses checks that for every non-2xx response code the upstream
+// spec defines, our spec also defines that status code. Does not compare schemas,
+// since upstream error responses are opaque {"code": N, "message": "..."}.
+func compareErrorResponses(upstream, ours *openapi3.Operation) []string {
+	var diffs []string
+	if upstream.Responses == nil || ours.Responses == nil {
+		return nil
+	}
+	upMap := upstream.Responses.Map()
+	ourMap := ours.Responses.Map()
+
+	for code := range upMap {
+		// Skip success codes (already handled) and "default".
+		if code == "200" || code == "201" || code == "204" || code == "default" {
+			continue
+		}
+		if _, ok := ourMap[code]; !ok {
+			desc := ""
+			if upMap[code].Value != nil && upMap[code].Value.Description != nil {
+				desc = *upMap[code].Value.Description
+			}
+			diffs = append(diffs, fmt.Sprintf("[error-response] MISSING %s response (upstream: %q)", code, desc))
+		}
+	}
+	sort.Strings(diffs)
 	return diffs
 }
 
@@ -633,7 +671,7 @@ func categorizeEndpoint(ep string) string {
 
 	// Organization management.
 	if strings.HasPrefix(path, "/api/orgs/") || strings.HasPrefix(path, "/api/change-") {
-		return categorizeOrgEndpoint(path)
+		return categorizeOrgEndpoint(parts[0], path)
 	}
 
 	// Extended user endpoints (beyond what CLI needs).
@@ -644,10 +682,12 @@ func categorizeEndpoint(ep string) string {
 			return "Core: user stacks listing"
 		case sub == "organizations/default":
 			return "Core: user organizations"
+		case strings.HasPrefix(sub, "tokens"):
+			return "Core: user tokens"
 		case strings.HasPrefix(sub, "organizations/"):
 			return "NOT PLANNED: User Organizations (extended)"
 		default:
-			return "NOT PLANNED: User (extended — tokens, VCS, invites)"
+			return "NOT PLANNED: User (extended — VCS, invites)"
 		}
 	}
 
@@ -667,29 +707,55 @@ func categorizeEndpoint(ep string) string {
 	return "NOT PLANNED: Other"
 }
 
-func categorizeOrgEndpoint(path string) string {
+func categorizeOrgEndpoint(method, path string) string {
+	// Core read-only endpoints we implement.
+	if method == "GET" {
+		switch {
+		case path == "/api/orgs/{orgName}/teams":
+			return "Core: teams listing"
+		case strings.HasSuffix(path, "/teams/{teamName}") && !strings.Contains(path, "/tokens"):
+			return "Core: team details"
+		case path == "/api/orgs/{orgName}/roles":
+			return "Core: roles listing"
+		}
+	}
+
 	matchers := []struct {
 		contains string
 		category string
 	}{
-		{"/teams", "NOT PLANNED: Teams"},
+		{"/teams", "NOT PLANNED: Teams (write)"},
 		{"/members", "NOT PLANNED: Org Members"},
-		{"/roles", "NOT PLANNED: RBAC/Roles"},
+		{"/roles", "NOT PLANNED: RBAC/Roles (write)"},
 		{"/deployments", "NOT PLANNED: Deployments (org-level)"},
 		{"/search", "NOT PLANNED: Search/Insights"},
-		{"/templates", "NOT PLANNED: Templates/Registry"},
+		{"/template", "NOT PLANNED: Templates/Registry"},
 		{"/webhooks", "NOT PLANNED: Webhooks (org-level)"},
-		{"/audit-logs", "NOT PLANNED: Audit Logs"},
+		{"/hooks", "NOT PLANNED: Webhooks (org-level)"},
+		{"/auditlog", "NOT PLANNED: Audit Logs"},
 		{"/policygroups", "NOT PLANNED: Policy Groups"},
 		{"/policypacks", "NOT PLANNED: Policy Packs"},
+		{"/policyresults", "NOT PLANNED: Policy Results"},
 		{"/agents", "NOT PLANNED: Agents/Agent Pools"},
+		{"/agent-pools", "NOT PLANNED: Agents/Agent Pools"},
 		{"/oidc", "NOT PLANNED: OIDC/Auth Policies"},
+		{"/auth/policies", "NOT PLANNED: OIDC/Auth Policies"},
 		{"/saml", "NOT PLANNED: SAML"},
 		{"/cmk", "NOT PLANNED: Customer Managed Keys"},
 		{"/tokens", "NOT PLANNED: Token Management"},
 		{"change-gates", "NOT PLANNED: Change Gates"},
 		{"change-requests", "NOT PLANNED: Change Requests"},
 		{"/packages", "NOT PLANNED: Registry/Packages"},
+		{"/ai/", "NOT PLANNED: AI/Copilot"},
+		{"/billing", "NOT PLANNED: Billing"},
+		{"/services", "NOT PLANNED: ESC/Services"},
+		{"/bulk-transfer", "NOT PLANNED: Bulk Transfer"},
+		{"/discovered-resources", "NOT PLANNED: Insights"},
+		{"/insights-scans", "NOT PLANNED: Insights"},
+		{"/resources/summary", "NOT PLANNED: Insights"},
+		{"/secrets/summary", "NOT PLANNED: Insights"},
+		{"/metadata", "NOT PLANNED: Org Metadata"},
+		{"/restore-stack", "NOT PLANNED: Stack Restore"},
 	}
 	for _, m := range matchers {
 		if strings.Contains(path, m.contains) {
@@ -804,5 +870,184 @@ func categorizeUpdateSub(sub string) string {
 		return "NOT PLANNED: Update Logs"
 	default:
 		return "NOT PLANNED: Update (other — " + sub + ")"
+	}
+}
+
+// --- CLI Error Semantics Validation ---
+//
+// The upstream Pulumi CLI checks specific HTTP status codes AND message patterns
+// to decide behavior (e.g., show "stack has resources" vs generic error).
+// This test validates our error responses match what the CLI expects.
+//
+// Source: reference/pulumi/pkg/backend/httpstate/{backend.go, client/client.go, client/api.go}
+
+// messageMatcher defines how to validate an error message against CLI expectations.
+type messageMatcher struct {
+	mode  string // "exact", "contains", or "any"
+	value string // the expected string (ignored for "any")
+}
+
+func exactMessage(s string) messageMatcher    { return messageMatcher{mode: "exact", value: s} }
+func containsMessage(s string) messageMatcher { return messageMatcher{mode: "contains", value: s} }
+func anyMessage() messageMatcher              { return messageMatcher{mode: "any"} }
+
+func (m messageMatcher) check(t *testing.T, actual string) {
+	t.Helper()
+	switch m.mode {
+	case "exact":
+		if actual != m.value {
+			t.Fatalf("CLI expects exact message %q, got %q", m.value, actual)
+		}
+	case "contains":
+		if !strings.Contains(actual, m.value) {
+			t.Fatalf("CLI expects message containing %q, got %q", m.value, actual)
+		}
+	case "any":
+		// No message validation needed — CLI only checks status code.
+	}
+}
+
+// TestCLIErrorSemantics validates that our error responses match the patterns
+// the upstream Pulumi CLI depends on for decision-making. Each scenario documents
+// the CLI source file and function where the check occurs.
+func TestCLIErrorSemantics(t *testing.T) {
+	tb := startBackend(t)
+
+	const org = "organization"
+
+	// Setup: create stacks needed by scenarios.
+	for _, stack := range []string{"dev", "dup-target"} {
+		resp := tb.httpDo(t, "POST", fmt.Sprintf("/api/stacks/%s/cli-err", org),
+			map[string]string{"stackName": stack})
+		resp.Body.Close()
+	}
+
+	// Run a successful update so dev stack has resources.
+	deployment := map[string]any{
+		"manifest": map[string]any{"time": "2024-01-01T00:00:00Z", "magic": "v1", "version": "v3.0.0"},
+		"resources": []map[string]any{
+			{"urn": "urn:pulumi:dev::cli-err::pulumi:pulumi:Stack::cli-err-dev", "type": "pulumi:pulumi:Stack"},
+			{"urn": "urn:pulumi:dev::cli-err::custom:module:Res::myRes", "type": "custom:module:Res", "id": "abc", "custom": true},
+		},
+	}
+	resp := tb.httpDo(t, "POST", fmt.Sprintf("/api/stacks/%s/cli-err/dev/update", org),
+		map[string]any{"config": map[string]any{}, "metadata": map[string]any{}})
+	var createResp struct{ UpdateID string }
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	_ = json.Unmarshal(b, &createResp)
+	resp = tb.httpDo(t, "POST", fmt.Sprintf("/api/stacks/%s/cli-err/dev/update/%s", org, createResp.UpdateID),
+		map[string]any{"tags": map[string]string{}})
+	resp.Body.Close()
+	body := map[string]any{"version": 3, "deployment": deployment}
+	resp = tb.httpDo(t, "PATCH", fmt.Sprintf("/api/stacks/%s/cli-err/dev/update/%s/checkpoint", org, createResp.UpdateID), body)
+	resp.Body.Close()
+	resp = tb.httpDo(t, "POST", fmt.Sprintf("/api/stacks/%s/cli-err/dev/update/%s/complete", org, createResp.UpdateID),
+		map[string]any{"status": "succeeded", "result": json.RawMessage(`{}`)})
+	resp.Body.Close()
+
+	// Start an update on dev to hold the lock (for conflict scenarios).
+	resp = tb.httpDo(t, "POST", fmt.Sprintf("/api/stacks/%s/cli-err/dev/update", org),
+		map[string]any{"config": map[string]any{}, "metadata": map[string]any{}})
+	var lockResp struct{ UpdateID string }
+	b, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	_ = json.Unmarshal(b, &lockResp)
+	resp = tb.httpDo(t, "POST", fmt.Sprintf("/api/stacks/%s/cli-err/dev/update/%s", org, lockResp.UpdateID),
+		map[string]any{"tags": map[string]string{}})
+	resp.Body.Close()
+
+	scenarios := []struct {
+		name        string
+		cliRef      string // CLI source reference
+		method      string
+		path        string
+		body        any
+		wantStatus  int
+		wantMessage messageMatcher
+	}{
+		// --- Message pattern checks (CLI branches on message content) ---
+		{
+			name: "deleteStack/400/hasResources",
+			cliRef: "client.go:658 — isStackHasResourcesError(): " +
+				`errRsp.Code == 400 && errRsp.Message == "Bad Request: Stack still contains resources."`,
+			method:      "DELETE",
+			path:        fmt.Sprintf("/api/stacks/%s/cli-err/dev", org),
+			wantStatus:  400,
+			wantMessage: exactMessage("Bad Request: Stack still contains resources."),
+		},
+		{
+			name: "createStack/409/alreadyExists",
+			cliRef: "backend.go:1077 — CreateStack(): " +
+				`strings.Contains(errResp.Message, "already exists")`,
+			method:      "POST",
+			path:        fmt.Sprintf("/api/stacks/%s/cli-err", org),
+			body:        map[string]string{"stackName": "dev"},
+			wantStatus:  409,
+			wantMessage: containsMessage("already exists"),
+		},
+
+		// --- Status code only checks (CLI doesn't inspect message) ---
+		{
+			name:        "getStack/404",
+			cliRef:      "backend.go:1031 — GetStack(): errResp.Code == http.StatusNotFound → nil, nil",
+			method:      "GET",
+			path:        fmt.Sprintf("/api/stacks/%s/cli-err/nonexistent", org),
+			wantStatus:  404,
+			wantMessage: anyMessage(),
+		},
+		{
+			name:        "projectExists/404",
+			cliRef:      "client.go:1544 — is404() used by DoesProjectExist() → false, nil",
+			method:      "HEAD",
+			path:        fmt.Sprintf("/api/stacks/%s/nonexistent-project", org),
+			wantStatus:  404,
+			wantMessage: anyMessage(),
+		},
+		{
+			name:        "getLatestUpdate/404",
+			cliRef:      "client.go:544 — GetLatestConfiguration(): restErr.Code == http.StatusNotFound → ErrNoPreviousDeployment",
+			method:      "GET",
+			path:        fmt.Sprintf("/api/stacks/%s/cli-err/dup-target/updates/latest", org),
+			wantStatus:  404,
+			wantMessage: anyMessage(),
+		},
+		{
+			name:        "createUpdate/409/conflict",
+			cliRef:      "backend.go:1553 — startUpdate(): err.Code == 409 → ConflictingUpdateError",
+			method:      "POST",
+			path:        fmt.Sprintf("/api/stacks/%s/cli-err/dev/update", org),
+			body:        map[string]any{"config": map[string]any{}, "metadata": map[string]any{}},
+			wantStatus:  409,
+			wantMessage: anyMessage(),
+		},
+	}
+
+	for _, sc := range scenarios {
+		t.Run(sc.name, func(t *testing.T) {
+			resp := tb.httpDo(t, sc.method, sc.path, sc.body)
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+
+			if resp.StatusCode != sc.wantStatus {
+				t.Fatalf("expected status %d, got %d (CLI ref: %s)\nbody: %s",
+					sc.wantStatus, resp.StatusCode, sc.cliRef, respBody)
+			}
+
+			// HEAD responses have no body to validate.
+			if sc.method == "HEAD" {
+				return
+			}
+
+			var errResp struct {
+				Code    int    `json:"code"`
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(respBody, &errResp); err != nil {
+				t.Fatalf("error response not valid JSON: %s", respBody)
+			}
+
+			sc.wantMessage.check(t, errResp.Message)
+		})
 	}
 }

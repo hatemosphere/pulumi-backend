@@ -535,7 +535,19 @@ type HealthCheckOutput struct {
 	}
 }
 
-// --- Auth ---
+// --- Auth / Login ---
+
+type LoginCallbackInput struct {
+	Code       string `query:"code"`
+	State      string `query:"state"`
+	OAuthError string `query:"error"`
+	OAuthState string `cookie:"oauth_state"`
+}
+
+type CLILoginInput struct {
+	SessionPort  string `query:"cliSessionPort"`
+	SessionNonce string `query:"cliSessionNonce"`
+}
 
 type TokenExchangeInput struct {
 	Body struct {
@@ -591,4 +603,107 @@ type ListUserTokensOutput struct {
 	Body struct {
 		Tokens []AdminTokenInfo `json:"tokens"`
 	}
+}
+
+// --- User Personal Tokens (upstream-compatible) ---
+
+// AccessTokenInfo represents a personal access token in API responses.
+type AccessTokenInfo struct {
+	ID          string `json:"id" doc:"Unique identifier"`
+	Description string `json:"description" doc:"User-provided description"`
+	LastUsed    int64  `json:"lastUsed" doc:"Unix epoch seconds, 0 if never used"`
+	Expires     int64  `json:"expires" doc:"Unix epoch seconds, 0 if never expires"`
+	Created     string `json:"created" doc:"ISO 8601 timestamp"`
+}
+
+// ListPersonalTokensOutput is the response listing the current user's tokens.
+type ListPersonalTokensOutput struct {
+	Body struct {
+		Tokens []AccessTokenInfo `json:"tokens"`
+	}
+}
+
+// CreatePersonalTokenInput is the request body for creating a personal token.
+type CreatePersonalTokenInput struct {
+	Body struct {
+		Description string `json:"description" doc:"Token description"`
+		Expires     int64  `json:"expires" doc:"Expiration unix epoch seconds, 0 for never"`
+	}
+}
+
+// CreatePersonalTokenOutput is the response after creating a personal token.
+type CreatePersonalTokenOutput struct {
+	Body struct {
+		ID         string `json:"id" doc:"Unique identifier"`
+		TokenValue string `json:"tokenValue" doc:"The token value (only shown once)"`
+	}
+}
+
+// DeletePersonalTokenInput is the path parameter for deleting a personal token.
+type DeletePersonalTokenInput struct {
+	TokenID string `path:"tokenId" doc:"Token identifier"`
+}
+
+// --- Teams (read-only, from RBAC config) ---
+
+// OrgNameInput is a common path parameter for org-scoped endpoints.
+type OrgNameInput struct {
+	OrgName string `path:"orgName" doc:"Organization name"`
+}
+
+// ListTeamsOutput is the response listing teams.
+type ListTeamsOutput struct {
+	Body struct {
+		Teams []TeamInfo `json:"teams"`
+	}
+}
+
+// TeamInfo represents a team in API responses.
+type TeamInfo struct {
+	Kind        string           `json:"kind" doc:"Team kind"`
+	Name        string           `json:"name" doc:"Team name"`
+	DisplayName string           `json:"displayName" doc:"Display name"`
+	Description string           `json:"description,omitempty"`
+	Members     []TeamMemberInfo `json:"members" doc:"Team members"`
+	Stacks      []TeamStackPerm  `json:"stacks" doc:"Stack permissions"`
+}
+
+// TeamMemberInfo represents a team member.
+type TeamMemberInfo struct {
+	Name        string `json:"name"`
+	GithubLogin string `json:"githubLogin"`
+	Role        string `json:"role" doc:"Member role in team"`
+}
+
+// TeamStackPerm represents a team's permission on a stack.
+type TeamStackPerm struct {
+	ProjectName string `json:"projectName"`
+	StackName   string `json:"stackName"`
+	Permission  int    `json:"permission" doc:"101=read, 102=write, 103=admin"`
+}
+
+// GetTeamInput is the path parameter for getting a single team.
+type GetTeamInput struct {
+	OrgName  string `path:"orgName" doc:"Organization name"`
+	TeamName string `path:"teamName" doc:"Team name"`
+}
+
+// GetTeamOutput is the response for a single team.
+type GetTeamOutput struct {
+	Body TeamInfo
+}
+
+// --- Roles (read-only, from RBAC config) ---
+
+// ListRolesOutput is the response listing roles.
+type ListRolesOutput struct {
+	Body struct {
+		Roles []RoleInfo `json:"roles"`
+	}
+}
+
+// RoleInfo represents a role in API responses.
+type RoleInfo struct {
+	Name       string `json:"name" doc:"Role name"`
+	Permission string `json:"permission" doc:"Permission level: none, read, write, admin"`
 }

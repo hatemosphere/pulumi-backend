@@ -232,6 +232,9 @@ func (s *SQLiteStore) CreateStack(ctx context.Context, st *Stack) error {
 		 VALUES (?, ?, ?, ?, 0, ?, ?)`,
 		st.OrgName, st.ProjectName, st.StackName, string(tagsJSON), now, now)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return fmt.Errorf("stack %s/%s/%s already exists", st.OrgName, st.ProjectName, st.StackName)
+		}
 		return fmt.Errorf("create stack: %w", err)
 	}
 
@@ -383,6 +386,9 @@ func (s *SQLiteStore) RenameStack(ctx context.Context, org, oldProject, oldName,
 		`UPDATE stacks SET project_name=?, name=?, updated_at=? WHERE org_name=? AND project_name=? AND name=?`,
 		newProject, newName, now, org, oldProject, oldName)
 	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return fmt.Errorf("stack %s/%s/%s already exists", org, newProject, newName)
+		}
 		return err
 	}
 

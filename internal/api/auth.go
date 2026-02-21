@@ -6,6 +6,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
@@ -22,6 +23,12 @@ func (s *Server) registerTokenExchange(api huma.API) {
 
 		result, err := s.oidcAuth.Exchange(ctx, input.Body.IDToken)
 		if err != nil {
+			audit.Event{
+				Actor:  "anonymous",
+				Action: "tokenExchange",
+				Status: "denied",
+				Reason: "id_token_exchange_failed",
+			}.Warn("Audit Log: Token Exchange Failed")
 			return nil, huma.NewError(http.StatusUnauthorized, err.Error())
 		}
 
@@ -35,6 +42,13 @@ func (s *Server) registerTokenExchange(api huma.API) {
 		}); err != nil {
 			return nil, huma.NewError(http.StatusInternalServerError, "failed to store token")
 		}
+
+		audit.Event{
+			Actor:      result.UserName,
+			Action:     "tokenExchange",
+			Status:     "granted",
+			AuthMethod: "oidc_id_token",
+		}.Info("Audit Log: Token Exchange")
 
 		out := &TokenExchangeOutput{}
 		out.Body.Token = result.Token

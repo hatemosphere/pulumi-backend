@@ -47,16 +47,17 @@ func (s *Server) registerUser(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/user/stacks",
 		Tags:        []string{"User"},
+		Errors:      []int{400},
 	}, func(ctx context.Context, input *ListUserStacksInput) (*ListUserStacksOutput, error) {
 		stacks, nextToken, err := s.engine.ListStacks(ctx, input.Organization, input.Project, input.ContinuationToken)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 
 		out := &ListUserStacksOutput{}
 		out.Body.Stacks = stacksToSummaries(stacks, true)
 		if nextToken != "" {
-			out.Body.ContinuationToken = &nextToken
+			out.Body.ContinuationToken = ptrString(nextToken)
 		}
 		return out, nil
 	})
@@ -66,6 +67,7 @@ func (s *Server) registerUser(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/user/organizations/default",
 		Tags:        []string{"User"},
+		Errors:      []int{400},
 	}, func(ctx context.Context, input *struct{}) (*GetDefaultOrgOutput, error) {
 		out := &GetDefaultOrgOutput{}
 		out.Body.GitHubLogin = s.defaultOrg
@@ -81,13 +83,13 @@ func (s *Server) registerUser(api huma.API) {
 	}, func(ctx context.Context, input *ListOrgStacksInput) (*ListOrgStacksOutput, error) {
 		stacks, nextToken, err := s.engine.ListStacks(ctx, input.OrgName, "", input.ContinuationToken)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 
 		out := &ListOrgStacksOutput{}
 		out.Body.Stacks = stacksToSummaries(stacks, false)
 		if nextToken != "" {
-			out.Body.ContinuationToken = &nextToken
+			out.Body.ContinuationToken = ptrString(nextToken)
 		}
 		return out, nil
 	})

@@ -14,10 +14,11 @@ func (s *Server) registerSecrets(api huma.API) {
 		Method:      http.MethodPost,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/encrypt",
 		Tags:        []string{"Secrets"},
+		Errors:      []int{413},
 	}, func(ctx context.Context, input *EncryptValueInput) (*EncryptValueOutput, error) {
 		ciphertext, err := s.engine.EncryptValue(ctx, input.OrgName, input.ProjectName, input.StackName, input.Body.Plaintext)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		out := &EncryptValueOutput{}
 		out.Body.Ciphertext = ciphertext
@@ -29,10 +30,11 @@ func (s *Server) registerSecrets(api huma.API) {
 		Method:      http.MethodPost,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/decrypt",
 		Tags:        []string{"Secrets"},
+		Errors:      []int{413},
 	}, func(ctx context.Context, input *DecryptValueInput) (*DecryptValueOutput, error) {
 		plaintext, err := s.engine.DecryptValue(ctx, input.OrgName, input.ProjectName, input.StackName, input.Body.Ciphertext)
 		if err != nil {
-			return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+			return nil, internalError(err)
 		}
 		out := &DecryptValueOutput{}
 		out.Body.Plaintext = plaintext
@@ -44,12 +46,13 @@ func (s *Server) registerSecrets(api huma.API) {
 		Method:      http.MethodPost,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/batch-encrypt",
 		Tags:        []string{"Secrets"},
+		Errors:      []int{413},
 	}, func(ctx context.Context, input *BatchEncryptInput) (*BatchEncryptOutput, error) {
 		ciphertexts := make([][]byte, len(input.Body.Plaintexts))
 		for i, pt := range input.Body.Plaintexts {
 			ct, err := s.engine.EncryptValue(ctx, input.OrgName, input.ProjectName, input.StackName, pt)
 			if err != nil {
-				return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+				return nil, internalError(err)
 			}
 			ciphertexts[i] = ct
 		}
@@ -63,12 +66,13 @@ func (s *Server) registerSecrets(api huma.API) {
 		Method:      http.MethodPost,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/batch-decrypt",
 		Tags:        []string{"Secrets"},
+		Errors:      []int{400, 404, 413},
 	}, func(ctx context.Context, input *BatchDecryptInput) (*BatchDecryptOutput, error) {
 		plaintexts := make(map[string][]byte, len(input.Body.Ciphertexts))
 		for _, ct := range input.Body.Ciphertexts {
 			pt, err := s.engine.DecryptValue(ctx, input.OrgName, input.ProjectName, input.StackName, ct)
 			if err != nil {
-				return nil, huma.NewError(http.StatusInternalServerError, err.Error())
+				return nil, internalError(err)
 			}
 			key := base64.StdEncoding.EncodeToString(ct)
 			plaintexts[key] = pt

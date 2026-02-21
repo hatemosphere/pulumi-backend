@@ -1,170 +1,197 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
-// registerLoginPage registers browser-based login routes on the raw mux.
-// These serve HTML, not JSON, so they're registered directly instead of via huma.
-func (s *Server) registerLoginPage(mux *http.ServeMux) {
+// registerLogin registers browser-based login routes on a huma API.
+// Uses StreamResponse so handlers can serve HTML, set cookies, and redirect.
+func (s *Server) registerLogin(api huma.API) {
 	slog.Info("registering login routes", "routes", []string{"/login", "/login/callback", "/cli-login", "/welcome/cli"})
-	mux.HandleFunc("GET /login", s.handleLoginPage)
-	mux.HandleFunc("GET /login/callback", s.handleLoginCallback)
-	// CLI browser login: Pulumi CLI opens this URL with cliSessionPort + cliSessionNonce.
-	// After OIDC provider OAuth, the backend redirects back to the CLI's local HTTP server.
-	mux.HandleFunc("GET /cli-login", s.handleCLILogin)
-	// Welcome page shown after CLI login completes.
-	mux.HandleFunc("GET /welcome/cli", s.handleWelcome)
+
+	// --- Login page ---
+	huma.Register(api, huma.Operation{
+		OperationID: "loginPage",
+		Method:      http.MethodGet,
+		Path:        "/login",
+		Tags:        []string{"Auth"},
+	}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				csrfToken := generateCSRFToken()
+				if csrfToken == "" {
+					ctx.SetStatus(http.StatusInternalServerError)
+					return
+				}
+
+				state := "csrf:" + csrfToken
+				setOAuthStateCookieHuma(ctx, csrfToken)
+
+				scheme := schemeFromCtx(ctx)
+				redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, ctx.Host())
+				authURL := s.oidcAuth.AuthCodeURL(redirectURI, state)
+
+				ctx.SetHeader("Content-Type", "text/html; charset=utf-8")
+				if err := loginPageTmpl.Execute(ctx.BodyWriter(), map[string]string{
+					"AuthURL":      authURL,
+					"ProviderName": s.oidcAuth.Config().ProviderName,
+				}); err != nil {
+					slog.Error("render login page", "error", err)
+				}
+			},
+		}, nil
+	})
+
+	// --- Login callback ---
+	huma.Register(api, huma.Operation{
+		OperationID: "loginCallback",
+		Method:      http.MethodGet,
+		Path:        "/login/callback",
+		Tags:        []string{"Auth"},
+	}, func(ctx context.Context, input *LoginCallbackInput) (*huma.StreamResponse, error) {
+		return &huma.StreamResponse{
+			Body: func(hCtx huma.Context) {
+				s.handleLoginCallbackHuma(hCtx, ctx, input)
+			},
+		}, nil
+	})
+
+	// --- CLI login ---
+	huma.Register(api, huma.Operation{
+		OperationID: "cliLogin",
+		Method:      http.MethodGet,
+		Path:        "/cli-login",
+		Tags:        []string{"Auth"},
+	}, func(_ context.Context, input *CLILoginInput) (*huma.StreamResponse, error) {
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				if input.SessionPort == "" || input.SessionNonce == "" {
+					ctx.SetHeader("Content-Type", "text/html; charset=utf-8")
+					renderErrorToWriter(ctx.BodyWriter(), "Missing cliSessionPort or cliSessionNonce parameters.")
+					return
+				}
+
+				csrfToken := generateCSRFToken()
+				if csrfToken == "" {
+					ctx.SetStatus(http.StatusInternalServerError)
+					return
+				}
+
+				state := fmt.Sprintf("cli:%s:%s:%s", input.SessionPort, input.SessionNonce, csrfToken)
+				setOAuthStateCookieHuma(ctx, csrfToken)
+
+				scheme := schemeFromCtx(ctx)
+				redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, ctx.Host())
+				authURL := s.oidcAuth.AuthCodeURL(redirectURI, state)
+
+				ctx.SetHeader("Location", authURL)
+				ctx.SetStatus(http.StatusTemporaryRedirect)
+			},
+		}, nil
+	})
+
+	// --- Welcome page (post-CLI-login) ---
+	huma.Register(api, huma.Operation{
+		OperationID: "welcomeCLI",
+		Method:      http.MethodGet,
+		Path:        "/welcome/cli",
+		Tags:        []string{"Auth"},
+	}, func(_ context.Context, _ *struct{}) (*huma.StreamResponse, error) {
+		return &huma.StreamResponse{
+			Body: func(ctx huma.Context) {
+				ctx.SetHeader("Content-Type", "text/html; charset=utf-8")
+				if err := welcomePageTmpl.Execute(ctx.BodyWriter(), nil); err != nil {
+					slog.Error("render welcome page", "error", err)
+				}
+			},
+		}, nil
+	})
 }
 
-// handleLoginPage serves the login page for browser-based login.
-func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
-	csrfToken := generateCSRFToken()
-	if csrfToken == "" {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// State format: "csrf:<token>" for browser login.
-	state := "csrf:" + csrfToken
-	setOAuthStateCookie(w, csrfToken)
-
-	scheme := requestScheme(r)
-	redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, r.Host)
-	authURL := s.oidcAuth.AuthCodeURL(redirectURI, state)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := loginPageTmpl.Execute(w, map[string]string{
-		"AuthURL":      authURL,
-		"ProviderName": s.oidcAuth.Config().ProviderName,
-	}); err != nil {
-		slog.Error("render login page", "error", err)
-	}
-}
-
-// handleCLILogin handles the Pulumi CLI's browser-based login flow.
-// The CLI opens this URL with cliSessionPort, cliSessionNonce, and cliSessionDescription.
-// We redirect to the OIDC provider; on callback, instead of showing a page, we redirect
-// to the CLI's local HTTP server at http://localhost:PORT/?accessToken=TOKEN&nonce=NONCE.
-func (s *Server) handleCLILogin(w http.ResponseWriter, r *http.Request) {
-	port := r.URL.Query().Get("cliSessionPort")
-	nonce := r.URL.Query().Get("cliSessionNonce")
-	if port == "" || nonce == "" {
-		renderError(w, "Missing cliSessionPort or cliSessionNonce parameters.")
-		return
-	}
-
-	csrfToken := generateCSRFToken()
-	if csrfToken == "" {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	// State format: "cli:<port>:<nonce>:<csrf>" for CLI login.
-	state := fmt.Sprintf("cli:%s:%s:%s", port, nonce, csrfToken)
-	setOAuthStateCookie(w, csrfToken)
-
-	scheme := requestScheme(r)
-	redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, r.Host)
-	authURL := s.oidcAuth.AuthCodeURL(redirectURI, state)
-
-	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
-}
-
-// handleLoginCallback handles the OAuth2 callback from the OIDC provider.
+// handleLoginCallbackHuma handles the OAuth2 callback from the OIDC provider.
 // Works for both browser login (state starts with "csrf:") and CLI login (state starts with "cli:").
-func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+func (s *Server) handleLoginCallbackHuma(hCtx huma.Context, goCtx context.Context, input *LoginCallbackInput) {
+	hCtx.SetHeader("Content-Type", "text/html; charset=utf-8")
 
-	// Check for OAuth error.
-	if errParam := r.URL.Query().Get("error"); errParam != "" {
-		renderError(w, "Login failed: "+errParam)
+	if input.OAuthError != "" {
+		renderErrorToWriter(hCtx.BodyWriter(), "Login failed: "+input.OAuthError)
 		return
 	}
 
-	state := r.URL.Query().Get("state")
-	if state == "" {
-		renderError(w, "Missing state parameter. Please try logging in again.")
+	if input.State == "" {
+		renderErrorToWriter(hCtx.BodyWriter(), "Missing state parameter. Please try logging in again.")
 		return
 	}
 
 	// Extract CSRF token from state and verify against cookie.
-	csrfToken := extractCSRFToken(state)
-	stateCookie, err := r.Cookie("oauth_state")
-	if err != nil || stateCookie.Value == "" || stateCookie.Value != csrfToken {
-		renderError(w, "Invalid state parameter. Please try logging in again.")
+	csrfToken := extractCSRFToken(input.State)
+	if input.OAuthState == "" || input.OAuthState != csrfToken {
+		renderErrorToWriter(hCtx.BodyWriter(), "Invalid state parameter. Please try logging in again.")
 		return
 	}
 
 	// Clear the state cookie.
-	http.SetCookie(w, &http.Cookie{
-		Name:   "oauth_state",
-		Value:  "",
-		Path:   "/",
-		MaxAge: -1,
-	})
+	clearCookie := &http.Cookie{Name: "oauth_state", Value: "", Path: "/", MaxAge: -1}
+	hCtx.AppendHeader("Set-Cookie", clearCookie.String())
 
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		renderError(w, "Missing authorization code.")
+	if input.Code == "" {
+		renderErrorToWriter(hCtx.BodyWriter(), "Missing authorization code.")
 		return
 	}
 
 	// Build the redirect URI (must match what was sent to the provider).
-	scheme := requestScheme(r)
-	redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, r.Host)
+	scheme := schemeFromCtx(hCtx)
+	redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, hCtx.Host())
 
 	// Exchange the authorization code for tokens.
-	codeResult, err := s.oidcAuth.ExchangeCode(r.Context(), code, redirectURI)
+	codeResult, err := s.oidcAuth.ExchangeCode(goCtx, input.Code, redirectURI)
 	if err != nil {
 		slog.Error("code exchange failed", "error", err)
-		renderError(w, "Failed to exchange authorization code. Please try again.")
+		renderErrorToWriter(hCtx.BodyWriter(), "Failed to exchange authorization code. Please try again.")
 		return
 	}
 
 	// Validate the ID token and mint a backend access token.
-	result, err := s.oidcAuth.Exchange(r.Context(), codeResult.IDToken)
+	result, err := s.oidcAuth.Exchange(goCtx, codeResult.IDToken)
 	if err != nil {
 		slog.Error("ID token exchange failed", "error", err)
-
-		// Audit Log: Login Failed
-		slog.Warn("Audit Log: Login Failed", //nolint:gosec // structured logger safely escapes taint
-			slog.Group("audit",
-				slog.String("actor", "anonymous"),
-				slog.String("action", "login_attempt"),
-				slog.String("status", "failed"),
-				slog.String("reason", "id_token_exchange_failed"),
-				slog.String("error", err.Error()),
-				slog.String("ip_address", r.RemoteAddr),
-			),
-		)
-
-		renderError(w, "Authentication failed: "+err.Error())
+		audit.Event{
+			Actor:  "anonymous",
+			Action: "login_attempt",
+			Status: "failed",
+			Reason: "id_token_exchange_failed",
+			IP:     hCtx.RemoteAddr(),
+			Extra:  []any{slog.String("error", err.Error())},
+		}.Warn("Audit Log: Login Failed")
+		renderErrorToWriter(hCtx.BodyWriter(), "Authentication failed: "+err.Error())
 		return
 	}
 
-	// Persist the token in the database, including the refresh token for
-	// later re-validation (Dex pattern: deactivated users will be detected
-	// when the refresh token is rejected).
-	if err := s.tokenStore.CreateToken(r.Context(), &storage.Token{
+	// Persist the token in the database.
+	if err := s.tokenStore.CreateToken(goCtx, &storage.Token{
 		TokenHash:    result.TokenHash,
 		UserName:     result.UserName,
-		Description:  tokenDescription(state),
+		Description:  tokenDescription(input.State),
 		RefreshToken: codeResult.RefreshToken,
 		Groups:       result.Groups,
 		ExpiresAt:    &result.ExpiresAt,
 	}); err != nil {
 		slog.Error("failed to store token", "error", err)
-		renderError(w, "Failed to create access token. Please try again.")
+		renderErrorToWriter(hCtx.BodyWriter(), "Failed to create access token. Please try again.")
 		return
 	}
 
@@ -172,44 +199,34 @@ func (s *Server) handleLoginCallback(w http.ResponseWriter, r *http.Request) {
 		slog.Info("stored refresh token for re-validation", "user", result.UserName) //nolint:gosec // structured logger
 	}
 
-	// Audit Log: Login Success
-	slog.Info("Audit Log: Login Success", //nolint:gosec // structured logger safely escapes taint
-		slog.Group("audit",
-			slog.String("actor", result.UserName),
-			slog.String("action", "login_success"),
-			slog.String("status", "granted"),
-			slog.String("auth_method", "oidc"),
-			slog.String("ip_address", r.RemoteAddr),
-		),
-	)
+	audit.Event{
+		Actor:      result.UserName,
+		Action:     "login_success",
+		Status:     "granted",
+		AuthMethod: "oidc",
+		IP:         hCtx.RemoteAddr(),
+	}.Info("Audit Log: Login Success")
 
 	// CLI login flow: redirect to the CLI's local server with the token.
-	if strings.HasPrefix(state, "cli:") {
-		port, nonce := parseCLIState(state)
+	if strings.HasPrefix(input.State, "cli:") {
+		port, nonce := parseCLIState(input.State)
 		if port != "" && nonce != "" {
 			cliURL := fmt.Sprintf("http://localhost:%s/?accessToken=%s&nonce=%s",
 				port, url.QueryEscape(result.Token), url.QueryEscape(nonce))
-			http.Redirect(w, r, cliURL, http.StatusTemporaryRedirect)
+			hCtx.SetHeader("Location", cliURL)
+			hCtx.SetStatus(http.StatusTemporaryRedirect)
 			return
 		}
 	}
 
 	// Browser login flow: show the token page.
-	loginURL := fmt.Sprintf("%s://%s", scheme, r.Host)
-	if err := callbackSuccessTmpl.Execute(w, map[string]any{
+	loginURL := fmt.Sprintf("%s://%s", scheme, hCtx.Host())
+	if err := callbackSuccessTmpl.Execute(hCtx.BodyWriter(), map[string]any{
 		"UserName": result.UserName,
 		"Token":    result.Token,
 		"LoginURL": loginURL,
 	}); err != nil {
 		slog.Error("render callback page", "error", err)
-	}
-}
-
-// handleWelcome serves a simple "login complete" page after CLI login.
-func (s *Server) handleWelcome(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := welcomePageTmpl.Execute(w, nil); err != nil {
-		slog.Error("render welcome page", "error", err)
 	}
 }
 
@@ -223,19 +240,22 @@ func generateCSRFToken() string {
 	return hex.EncodeToString(b)
 }
 
-func setOAuthStateCookie(w http.ResponseWriter, csrfToken string) {
-	http.SetCookie(w, &http.Cookie{
+// setOAuthStateCookieHuma sets the OAuth state cookie via huma context.
+func setOAuthStateCookieHuma(ctx huma.Context, csrfToken string) {
+	cookie := &http.Cookie{
 		Name:     "oauth_state",
 		Value:    csrfToken,
 		Path:     "/",
 		MaxAge:   300, // 5 minutes
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-	})
+	}
+	ctx.AppendHeader("Set-Cookie", cookie.String())
 }
 
-func requestScheme(r *http.Request) string {
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+// schemeFromCtx determines the request scheme from TLS state and headers.
+func schemeFromCtx(ctx huma.Context) string {
+	if ctx.TLS() != nil || ctx.Header("X-Forwarded-Proto") == "https" {
 		return "https"
 	}
 	return "http"
@@ -274,10 +294,9 @@ func tokenDescription(state string) string {
 	return "browser-login"
 }
 
-func renderError(w http.ResponseWriter, msg string) {
+func renderErrorToWriter(w io.Writer, msg string) {
 	if err := errorPageTmpl.Execute(w, map[string]string{"Error": msg}); err != nil {
 		slog.Error("render error page", "error", err)
-		http.Error(w, msg, http.StatusInternalServerError)
 	}
 }
 

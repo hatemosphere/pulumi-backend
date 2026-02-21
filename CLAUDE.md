@@ -23,6 +23,8 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | `internal/api/router.go` | Server, huma config, all middleware (auth, RBAC, metrics, logging) |
 | `internal/api/types.go` | All huma request/response structs |
 | `internal/api/errors.go` | Custom PulumiError overriding huma defaults |
+| `internal/api/tokens.go` | User token self-service (GET/POST/DELETE /api/user/tokens) |
+| `internal/api/org.go` | Read-only teams/roles from RBAC config |
 | `internal/api/openapi.go` | OpenAPI spec builder (huma -> kin-openapi) |
 | `internal/auth/jwt.go` | JWT authenticator (HMAC/RSA/ECDSA auto-detection) |
 | `internal/auth/rbac.go` | RBAC resolver (group roles + stack policies) |
@@ -37,7 +39,8 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | `internal/engine/aesgcm.go` | Shared AES-256-GCM seal/open helpers |
 | `internal/storage/sqlite.go` | SQLite implementation (inline schema) |
 | `internal/storage/storage.go` | `Store` interface + data types |
-| `tests/spec_test.go` | OpenAPI spec compliance vs upstream |
+| `tests/spec_test.go` | OpenAPI spec compliance vs upstream + CLI error semantics |
+| `tests/reliability_test.go` | State guards, error format, concurrency, delta/journal correctness, error code validation |
 | `tests/auth_integration_test.go` | Auth + RBAC integration tests |
 
 ## Reference code
@@ -65,7 +68,8 @@ golangci-lint run ./...                                   # lint
 - **OpenAPI**: auto-generated from Go struct types, no hand-built spec
 - **huma config**: `AllowAdditionalPropertiesByDefault=true`, `FieldsOptionalByDefault=true`
 - **RawBody caution**: huma pools request body buffers. Any `RawBody []byte` stored beyond handler lifetime must be copied (`make + copy`).
-- **Middleware architecture**: HTTP-level (realIP, recoverer, requestLogger, gzipDecompressor) + huma-level (metricsHumaMiddleware, authHumaMiddleware, rbacMiddleware). Two huma API instances on the same mux: publicAPI (no auth) and api (auth + RBAC).
+- **Middleware architecture**: HTTP-level (realIP, recoverer, requestLogger, gzipDecompressor) + huma-level (metricsHumaMiddleware, authHumaMiddleware, rbacMiddleware, auditHumaMiddleware). Two huma API instances on the same mux: publicAPI (no auth) and api (auth + RBAC).
+- **Audit logging**: huma-level `auditHumaMiddleware` emits structured JSON audit entries for all state-mutating operations (POST/PATCH/PUT/DELETE) with actor, action (operationID), resource, http_status, ip_address. High-frequency ops excluded (checkpoints, events, lease renewals). Inline audit entries for login, token exchange, and RBAC denials. All entries use `slog.Group("audit", ...)` format.
 - SQLite: pure Go via `modernc.org/sqlite`, WAL mode, `MaxOpenConns=1`
 - Auth: four modes — `single-tenant` (any token = admin), `google` (Google OIDC via go-oidc/v3 + backend tokens + groups + browser login), `oidc` (generic OIDC provider), `jwt` (stateless, claims-based)
 - OIDC architecture: `OIDCAuthenticator` interface in `oidc.go`, Google mode is a specialization (`NewGoogleOIDCAuthenticator`). `TestOIDCValidator` + `TestOIDCRefresher` interfaces for test mock injection via `NewTestOIDCAuthenticator`.
@@ -73,10 +77,13 @@ golangci-lint run ./...                                   # lint
 - OIDC refresh token re-validation: browser/CLI login captures provider's refresh token, stored in `tokens` table. On each auth request past half TTL, async re-validation via `oauth2.TokenSource` detects deactivated users (Dex pattern).
 - OIDC groups: stored in DB for generic OIDC providers (from token claims at login), resolved live via Google Admin SDK for Google mode.
 - Admin endpoints: `requireAdmin()` helper checks `IsAdmin` (single-tenant) OR RBAC admin permission (Google/JWT). Token management: `GET/DELETE /api/admin/tokens/{userName}`.
+- User token endpoints: `GET/POST/DELETE /api/user/tokens` — self-service token management via `registerUserTokens`, gated on `s.tokenStore != nil`
+- Teams/roles endpoints: `GET /api/orgs/{orgName}/teams`, `GET /api/orgs/{orgName}/teams/{teamName}`, `GET /api/orgs/{orgName}/roles` — read-only mapping of RBAC YAML config to upstream-shaped responses via `registerOrg`
 - RBAC: group-based with stack-level policy overrides. Permission levels: `none < read < write < admin`. Admin RBAC role grants access to admin endpoints too.
 - Secrets: per-stack AES-256-GCM keys wrapped by master key (local) or GCP KMS
 - Deployments: gzip-compressed in DB, zero-copy gzip export when client accepts it
 - Leases: in-memory `sync.Map` + SQLite; lost on restart
 - State versions: pruned to last N (default 50) per stack
 - Capabilities: `delta-checkpoint-uploads-v2`, `batch-encrypt`
+- CLI error semantics: error messages match exact patterns the upstream CLI checks (e.g., `"Bad Request: Stack still contains resources."` for deleteStack 400). Validated by `TestCLIErrorSemantics`.
 - No Pulumi SDK import: all API shapes hand-coded from reference clone

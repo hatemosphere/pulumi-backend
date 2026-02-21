@@ -22,6 +22,13 @@ import (
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
+// Sentinel errors for update state conflicts (mapped to HTTP 409 in the API layer).
+var (
+	ErrUpdateNotInProgress  = errors.New("The Update has not started or The Update has been cancelled or The Update has already completed")
+	ErrStackHasActiveUpdate = errors.New("Another update is currently in progress.")
+	ErrNoActiveUpdate       = errors.New("The Update has not started")
+)
+
 // ManagerConfig holds tuning parameters for the engine manager.
 type ManagerConfig struct {
 	LeaseDuration      time.Duration
@@ -163,7 +170,7 @@ func (m *Manager) DeleteStack(ctx context.Context, org, project, stack string, f
 
 			if err := json.Unmarshal(deploymentData, &deployment); err == nil {
 				if len(deployment.Deployment.Resources) > 0 {
-					return fmt.Errorf("stack still has %d resources; use force to delete anyway", len(deployment.Deployment.Resources))
+					return errors.New("Bad Request: Stack still contains resources.")
 				}
 			}
 		}
@@ -353,12 +360,13 @@ func (m *Manager) CreateUpdate(ctx context.Context, org, project, stack, kind st
 			// Auto-cancel expired update. If cancel fails, abort so the next
 			// attempt retries cleanup rather than leaving a stale record.
 			if err := m.store.CancelUpdate(ctx, active.ID); err != nil {
-				return nil, fmt.Errorf("cancel expired update %s: %w", active.ID, err)
+				slog.Error("failed to cancel expired update", "updateID", active.ID, "error", err)
+				return nil, ErrStackHasActiveUpdate
 			}
 			m.releaseStackLock(org, project, stack)
 			m.activeUpdates.Add(-1)
 		} else if active.Status != "not-started" || !time.Now().After(active.TokenExpiresAt.Add(m.leaseDuration)) {
-			return nil, fmt.Errorf("stack already has an active update: %s", active.ID)
+			return nil, ErrStackHasActiveUpdate
 		}
 	}
 
@@ -399,7 +407,7 @@ func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[str
 		return nil, err
 	}
 	if u == nil {
-		return nil, fmt.Errorf("update not found: %s", updateID)
+		return nil, errors.New("update not found")
 	}
 
 	// Acquire stack lock.
@@ -425,7 +433,8 @@ func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[str
 	if len(tags) > 0 {
 		if err := m.store.UpdateStackTags(ctx, u.OrgName, u.ProjectName, u.StackName, tags); err != nil {
 			m.releaseStackLock(u.OrgName, u.ProjectName, u.StackName)
-			return nil, fmt.Errorf("update stack tags: %w", err)
+			slog.Error("failed to update stack tags", "error", err)
+			return nil, errors.New("failed to update stack tags")
 		}
 	}
 
@@ -461,12 +470,9 @@ func (m *Manager) CompleteUpdate(ctx context.Context, updateID string, status st
 		slog.Warn("failed to flush events before completing update", "error", err)
 	}
 
-	u, err := m.store.GetUpdate(ctx, updateID)
+	u, err := m.requireInProgress(ctx, updateID)
 	if err != nil {
 		return err
-	}
-	if u == nil {
-		return errors.New("update not found")
 	}
 
 	// If journaling was used, replay journal to reconstruct final state.
@@ -570,7 +576,7 @@ func (m *Manager) CancelUpdate(ctx context.Context, org, project, stack string) 
 		return err
 	}
 	if active == nil {
-		return errors.New("no active update to cancel")
+		return ErrNoActiveUpdate
 	}
 	err = m.store.CancelUpdate(ctx, active.ID)
 	if err != nil {
@@ -591,13 +597,25 @@ func (m *Manager) GetActiveUpdate(ctx context.Context, org, project, stack strin
 
 // --- Checkpoints ---
 
-func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deployment []byte) error {
+// requireInProgress fetches the update and verifies it is in "in-progress" state.
+func (m *Manager) requireInProgress(ctx context.Context, updateID string) (*storage.Update, error) {
 	u, err := m.store.GetUpdate(ctx, updateID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if u == nil {
-		return errors.New("update not found")
+		return nil, errors.New("update not found")
+	}
+	if u.Status != "in-progress" {
+		return nil, ErrUpdateNotInProgress
+	}
+	return u, nil
+}
+
+func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deployment []byte) error {
+	u, err := m.requireInProgress(ctx, updateID)
+	if err != nil {
+		return err
 	}
 
 	// Compress before saving.
@@ -659,12 +677,9 @@ func decompress(data []byte) ([]byte, error) {
 
 // SaveCheckpointDelta applies a text diff to the previous state to produce the new state.
 func (m *Manager) SaveCheckpointDelta(ctx context.Context, updateID string, expectedHash string, delta string, sequenceNumber int) error {
-	u, err := m.store.GetUpdate(ctx, updateID)
+	u, err := m.requireInProgress(ctx, updateID)
 	if err != nil {
 		return err
-	}
-	if u == nil {
-		return errors.New("update not found")
 	}
 
 	// Get current state to apply delta.
