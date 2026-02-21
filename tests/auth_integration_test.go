@@ -19,6 +19,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/hatemosphere/pulumi-backend/internal/api"
+	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/auth"
 	"github.com/hatemosphere/pulumi-backend/internal/engine"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
@@ -27,6 +28,10 @@ import (
 // startBackendWithOpts starts a backend server with custom ServerOptions.
 func startBackendWithOpts(t *testing.T, opts ...api.ServerOption) *testBackend {
 	t.Helper()
+
+	// Suppress audit logs in tests (re-enabled in tests that exercise auditing).
+	audit.Enabled = false
+	t.Cleanup(func() { audit.Enabled = true })
 
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "test.db")

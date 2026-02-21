@@ -239,17 +239,17 @@ func (s *Server) registerStacks(api huma.API) {
 
 		_, err = s.engine.StartUpdate(ctx, result.UpdateID, nil, 0)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, conflictOrInternalError(err)
 		}
 
 		err = s.engine.SaveCheckpoint(ctx, result.UpdateID, deployment)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, conflictOrInternalError(err)
 		}
 
 		err = s.engine.CompleteUpdate(ctx, result.UpdateID, "succeeded", json.RawMessage(`{}`))
 		if err != nil {
-			return nil, internalError(err)
+			return nil, conflictOrInternalError(err)
 		}
 
 		out := &ImportStackOutput{}

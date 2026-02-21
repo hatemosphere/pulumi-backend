@@ -72,6 +72,10 @@ type Config struct {
 
 	// RBAC config file path (empty = no RBAC enforcement, all users are admin).
 	RBACConfigPath string
+
+	// Logging.
+	LogFormat string // "json" (default) or "text"
+	AuditLogs bool   // enable audit logging (default true)
 }
 
 func Parse() *Config {
@@ -131,6 +135,10 @@ func Parse() *Config {
 	flag.StringVar(&c.JWTGroupsClaim, "jwt-groups-claim", "groups", "JWT claim name for group memberships")
 	flag.StringVar(&c.JWTUsernameClaim, "jwt-username-claim", "sub", "JWT claim for username (sub or email)")
 	flag.StringVar(&c.RBACConfigPath, "rbac-config", "", "path to rbac.yaml (empty = all users are admin)")
+
+	// Logging flags.
+	flag.StringVar(&c.LogFormat, "log-format", "json", "log format: json or text")
+	flag.BoolVar(&c.AuditLogs, "audit-logs", true, "enable structured audit logging")
 
 	flag.Parse()
 
@@ -274,6 +282,12 @@ func Parse() *Config {
 	}
 	if v := os.Getenv("PULUMI_BACKEND_RBAC_CONFIG"); v != "" {
 		c.RBACConfigPath = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_LOG_FORMAT"); v != "" {
+		c.LogFormat = v
+	}
+	if v := os.Getenv("PULUMI_BACKEND_AUDIT_LOGS"); v == "false" {
+		c.AuditLogs = false
 	}
 
 	if c.MasterKey == "" && c.SecretsProvider == "local" {

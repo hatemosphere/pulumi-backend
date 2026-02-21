@@ -57,6 +57,8 @@ All flags have corresponding environment variables with the `PULUMI_BACKEND_` pr
 | `-tls` | | `false` | Enable TLS |
 | `-cert` | | | TLS certificate file |
 | `-key` | | | TLS key file |
+| `-log-format` | `PULUMI_BACKEND_LOG_FORMAT` | `json` | Log format: `json` or `text` |
+| `-audit-logs` | `PULUMI_BACKEND_AUDIT_LOGS` | `true` | Enable structured audit logging |
 
 If no master key is provided, one is auto-generated and printed to stderr. Persist it if you want secrets to survive restarts.
 

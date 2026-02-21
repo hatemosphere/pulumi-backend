@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hatemosphere/pulumi-backend/internal/api"
+	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/engine"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
@@ -43,6 +44,10 @@ type backendConfig struct {
 // startBackendWithConfig starts a backend with custom engine and storage config.
 func startBackendWithConfig(t *testing.T, cfg backendConfig) *testBackend {
 	t.Helper()
+
+	// Suppress audit logs in tests (re-enabled in tests that exercise auditing).
+	audit.Enabled = false
+	t.Cleanup(func() { audit.Enabled = true })
 
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "test.db")

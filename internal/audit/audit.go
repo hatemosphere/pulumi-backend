@@ -2,6 +2,10 @@ package audit
 
 import "log/slog"
 
+// Enabled controls whether audit log entries are emitted. Set to false to
+// suppress all audit output (useful in tests that don't exercise auditing).
+var Enabled = true
+
 // Event represents a structured audit log entry with typed fields.
 // Only non-zero fields are included in the log output.
 type Event struct {
@@ -20,11 +24,17 @@ type Event struct {
 
 // Info emits the event as an INFO-level structured audit log entry.
 func (e Event) Info(msg string) {
+	if !Enabled {
+		return
+	}
 	slog.Info(msg, slog.Group("audit", e.attrs()...)) //nolint:gosec // structured logger safely escapes taint
 }
 
 // Warn emits the event as a WARN-level structured audit log entry.
 func (e Event) Warn(msg string) {
+	if !Enabled {
+		return
+	}
 	slog.Warn(msg, slog.Group("audit", e.attrs()...)) //nolint:gosec // structured logger safely escapes taint
 }
 

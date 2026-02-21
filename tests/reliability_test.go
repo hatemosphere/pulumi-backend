@@ -1877,13 +1877,17 @@ func TestReliability_ConcurrentImports(t *testing.T) {
 	}
 	wg.Wait()
 
-	// At least one should succeed (200), others may get 409 (locked).
+	// Exactly one should succeed, losers get 409 (conflict at CreateUpdate
+	// or a subsequent step that detects the race via sentinel errors).
 	successes := 0
 	for _, code := range results {
-		if code == 200 {
+		switch code {
+		case 200:
 			successes++
-		} else if code != 409 {
-			t.Fatalf("unexpected status code %d (expected 200 or 409)", code)
+		case 409:
+			// Expected: lock contention or stale update state.
+		default:
+			t.Errorf("unexpected status code %d from concurrent import", code)
 		}
 	}
 	if successes == 0 {

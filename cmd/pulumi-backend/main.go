@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hatemosphere/pulumi-backend/internal/api"
+	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/auth"
 	"github.com/hatemosphere/pulumi-backend/internal/config"
 	"github.com/hatemosphere/pulumi-backend/internal/engine"
@@ -19,10 +20,21 @@ import (
 )
 
 func main() {
-	// Structured JSON logging.
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
-
 	cfg := config.Parse()
+
+	// Configure logging format.
+	var logHandler slog.Handler
+	if cfg.LogFormat == "text" {
+		logHandler = slog.NewTextHandler(os.Stdout, nil)
+	} else {
+		logHandler = slog.NewJSONHandler(os.Stdout, nil)
+	}
+	slog.SetDefault(slog.New(logHandler))
+
+	// Disable audit logging if configured.
+	if !cfg.AuditLogs {
+		audit.Enabled = false
+	}
 
 	// Open storage.
 	store, err := storage.NewSQLiteStore(cfg.DBPath, storage.SQLiteStoreConfig{
