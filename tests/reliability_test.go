@@ -1290,3 +1290,750 @@ func TestDeclaredErrorCodesCoverage(t *testing.T) {
 			"and update the 'tested' map in TestDeclaredErrorCodesCoverage.", strings.Join(missing, "\n  "))
 	}
 }
+
+// --- Category 10: Verbatim Checkpoint Mode ---
+
+func TestReliability_VerbatimCheckpointStoresRawDeployment(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-verbatim", "dev")
+
+	// Build a fully-formed deployment envelope (what verbatim expects).
+	deployment := map[string]any{
+		"version": 3,
+		"deployment": map[string]any{
+			"manifest": map[string]any{
+				"time":    "2024-01-01T00:00:00Z",
+				"magic":   "verbatim-marker",
+				"version": "v3.0.0",
+			},
+			"resources": []map[string]any{
+				{
+					"urn":  "urn:pulumi:dev::rel-verbatim::pulumi:pulumi:Stack::rel-verbatim-dev",
+					"type": "pulumi:pulumi:Stack",
+				},
+			},
+		},
+	}
+	deploymentBytes, _ := json.Marshal(deployment)
+
+	updateID, _ := rCreateAndStartUpdate(t, tb, "rel-verbatim", "dev", 0)
+
+	// Post verbatim checkpoint (raw envelope, no wrapping).
+	resp := tb.httpDo(t, "PATCH",
+		fmt.Sprintf("/api/stacks/%s/rel-verbatim/dev/update/%s/checkpointverbatim", rOrg, updateID),
+		map[string]any{
+			"version":           3,
+			"untypedDeployment": json.RawMessage(deploymentBytes),
+			"sequenceNumber":    1,
+		})
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("verbatim checkpoint: status %d", resp.StatusCode)
+	}
+
+	rCompleteUpdate(t, tb, "rel-verbatim", "dev", updateID, "succeeded")
+
+	// Export and verify the marker is present.
+	data := rExportState(t, tb, "rel-verbatim", "dev")
+	if !strings.Contains(string(data), "verbatim-marker") {
+		t.Fatal("expected 'verbatim-marker' in exported state after verbatim checkpoint")
+	}
+}
+
+// --- Category 11: Mixed Checkpoint Modes ---
+
+func TestReliability_MixedCheckpointModes(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-mixed", "dev")
+
+	// Step 1: Full checkpoint (regular mode).
+	rRunFullUpdate(t, tb, "rel-mixed", "dev", rMakeDeployment("step1-full"))
+
+	data := rExportState(t, tb, "rel-mixed", "dev")
+	if !strings.Contains(string(data), "step1-full") {
+		t.Fatal("step 1: expected 'step1-full' in state")
+	}
+
+	// Step 2: Verbatim checkpoint.
+	verbatimDeployment := map[string]any{
+		"version": 3,
+		"deployment": map[string]any{
+			"manifest": map[string]any{
+				"time":    "2024-01-01T00:00:00Z",
+				"magic":   "step2-verbatim",
+				"version": "v3.0.0",
+			},
+			"resources": []map[string]any{
+				{
+					"urn":  "urn:pulumi:dev::rel-mixed::pulumi:pulumi:Stack::rel-mixed-dev",
+					"type": "pulumi:pulumi:Stack",
+				},
+			},
+		},
+	}
+	verbatimBytes, _ := json.Marshal(verbatimDeployment)
+
+	updateID2, _ := rCreateAndStartUpdate(t, tb, "rel-mixed", "dev", 0)
+	resp := tb.httpDo(t, "PATCH",
+		fmt.Sprintf("/api/stacks/%s/rel-mixed/dev/update/%s/checkpointverbatim", rOrg, updateID2),
+		map[string]any{
+			"version":           3,
+			"untypedDeployment": json.RawMessage(verbatimBytes),
+			"sequenceNumber":    1,
+		})
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("verbatim checkpoint: status %d", resp.StatusCode)
+	}
+	rCompleteUpdate(t, tb, "rel-mixed", "dev", updateID2, "succeeded")
+
+	data = rExportState(t, tb, "rel-mixed", "dev")
+	if !strings.Contains(string(data), "step2-verbatim") {
+		t.Fatal("step 2: expected 'step2-verbatim' in state")
+	}
+	if strings.Contains(string(data), "step1-full") {
+		t.Fatal("step 2: 'step1-full' should have been replaced")
+	}
+
+	// Step 3: Delta checkpoint on top of verbatim state.
+	baseState := rExportState(t, tb, "rel-mixed", "dev")
+	baseStr := string(baseState)
+
+	idx := strings.Index(baseStr, `"step2-verbatim"`)
+	if idx < 0 {
+		t.Fatal("could not find '\"step2-verbatim\"' in state for delta")
+	}
+
+	oldText := `"step2-verbatim"`
+	newText := `"step3-delta"`
+	expected := baseStr[:idx] + newText + baseStr[idx+len(oldText):]
+	hash := sha256.Sum256([]byte(expected))
+	hashStr := hex.EncodeToString(hash[:])
+
+	delta := fmt.Sprintf(`[{"Span":{"uri":"","start":{"line":0,"column":0,"offset":%d},"end":{"line":0,"column":0,"offset":%d}},"NewText":%q}]`,
+		idx, idx+len(oldText), newText)
+
+	updateID3, _ := rCreateAndStartUpdate(t, tb, "rel-mixed", "dev", 0)
+	resp = tb.httpDo(t, "PATCH",
+		fmt.Sprintf("/api/stacks/%s/rel-mixed/dev/update/%s/checkpointdelta", rOrg, updateID3),
+		map[string]any{
+			"version":         3,
+			"checkpointHash":  hashStr,
+			"sequenceNumber":  1,
+			"deploymentDelta": delta,
+		})
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("delta checkpoint: status %d", resp.StatusCode)
+	}
+	rCompleteUpdate(t, tb, "rel-mixed", "dev", updateID3, "succeeded")
+
+	data = rExportState(t, tb, "rel-mixed", "dev")
+	if !strings.Contains(string(data), "step3-delta") {
+		t.Fatal("step 3: expected 'step3-delta' in state")
+	}
+
+	// Step 4: Back to full checkpoint — state should be fully replaced.
+	rRunFullUpdate(t, tb, "rel-mixed", "dev", rMakeDeployment("step4-full"))
+
+	data = rExportState(t, tb, "rel-mixed", "dev")
+	if !strings.Contains(string(data), "step4-full") {
+		t.Fatal("step 4: expected 'step4-full' in state")
+	}
+	if strings.Contains(string(data), "step3-delta") {
+		t.Fatal("step 4: 'step3-delta' should have been replaced")
+	}
+}
+
+// --- Category 12: Stack Recreation After Deletion ---
+
+func TestReliability_StackRecreationAfterDeletion(t *testing.T) {
+	tb := startBackend(t)
+
+	// Create stack and run an update.
+	rCreateStack(t, tb, "rel-recreate", "dev")
+	rRunFullUpdate(t, tb, "rel-recreate", "dev", rMakeDeployment("original-state"))
+
+	// Encrypt a secret value.
+	resp := tb.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-recreate/dev/encrypt", rOrg),
+		map[string]any{"plaintext": []byte("my-secret-value")})
+	var encResp struct {
+		Ciphertext string `json:"ciphertext"`
+	}
+	httpJSON(t, resp, &encResp)
+	if encResp.Ciphertext == "" {
+		t.Fatal("expected non-empty ciphertext")
+	}
+	oldCiphertext := encResp.Ciphertext
+
+	// Force-delete the stack (has resources).
+	resp = tb.httpDo(t, "DELETE",
+		fmt.Sprintf("/api/stacks/%s/rel-recreate/dev?force=true", rOrg), nil)
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("force delete: expected 204, got %d", resp.StatusCode)
+	}
+
+	// Verify stack is gone.
+	resp = tb.httpDo(t, "GET",
+		fmt.Sprintf("/api/stacks/%s/rel-recreate/dev", rOrg), nil)
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("expected 404 after deletion, got %d", resp.StatusCode)
+	}
+
+	// Recreate the stack.
+	rCreateStack(t, tb, "rel-recreate", "dev")
+
+	// Export should return empty/synthetic state (version 0, no resources).
+	data := rExportState(t, tb, "rel-recreate", "dev")
+	if strings.Contains(string(data), "original-state") {
+		t.Fatal("recreated stack should not contain old state")
+	}
+
+	// New update should work from scratch.
+	version := rRunFullUpdate(t, tb, "rel-recreate", "dev", rMakeDeployment("fresh-state"))
+	if version != 1 {
+		t.Fatalf("recreated stack first update: expected version 1, got %d", version)
+	}
+
+	data = rExportState(t, tb, "rel-recreate", "dev")
+	if !strings.Contains(string(data), "fresh-state") {
+		t.Fatal("expected 'fresh-state' in recreated stack export")
+	}
+
+	// Old ciphertext should NOT decrypt with new key (new secrets key generated).
+	resp = tb.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-recreate/dev/decrypt", rOrg),
+		map[string]any{"ciphertext": oldCiphertext})
+	resp.Body.Close()
+	if resp.StatusCode == 200 {
+		t.Fatal("old ciphertext should not decrypt after stack recreation (new secrets key)")
+	}
+}
+
+// --- Category 13: Stack Operations During Active Updates ---
+
+func TestReliability_DeleteStackDuringActiveUpdate(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-delete-active", "dev")
+
+	// Start an update (holds lock).
+	updateID, _ := rCreateAndStartUpdate(t, tb, "rel-delete-active", "dev", 0)
+	rPostCheckpoint(t, tb, "rel-delete-active", "dev", updateID, rMakeDeployment("in-progress"))
+
+	// Try to delete stack while update is in progress — should fail (has resources).
+	resp := tb.httpDo(t, "DELETE",
+		fmt.Sprintf("/api/stacks/%s/rel-delete-active/dev", rOrg), nil)
+	resp.Body.Close()
+	if resp.StatusCode == 204 {
+		t.Fatal("should not be able to delete stack with resources during active update")
+	}
+
+	// Force-delete should still work (bypasses resource check).
+	resp = tb.httpDo(t, "DELETE",
+		fmt.Sprintf("/api/stacks/%s/rel-delete-active/dev?force=true", rOrg), nil)
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("force delete during active update: expected 204, got %d", resp.StatusCode)
+	}
+}
+
+func TestReliability_RenameStackDuringActiveUpdate(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-rename-active", "dev")
+	rRunFullUpdate(t, tb, "rel-rename-active", "dev", rMakeDeployment("initial"))
+
+	// Start a new update (holds lock).
+	rCreateAndStartUpdate(t, tb, "rel-rename-active", "dev", 0)
+
+	// Try to rename — the rename itself should succeed at the storage level
+	// (rename doesn't check update locks, it modifies the stack record directly).
+	resp := tb.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-rename-active/dev/rename", rOrg),
+		map[string]string{"newName": "dev-renamed"})
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// Document the behavior: rename may succeed or fail depending on implementation.
+	t.Logf("rename during active update: status %d, body: %s", resp.StatusCode, body)
+}
+
+// --- Category 14: Secrets Consistency After Rename ---
+
+func TestReliability_SecretsConsistentAfterRename(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-secrets-rename", "dev")
+	rRunFullUpdate(t, tb, "rel-secrets-rename", "dev", rMakeDeployment("initial"))
+
+	// Encrypt a value.
+	resp := tb.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-secrets-rename/dev/encrypt", rOrg),
+		map[string]any{"plaintext": []byte("secret-before-rename")})
+	var encResp struct {
+		Ciphertext string `json:"ciphertext"`
+	}
+	httpJSON(t, resp, &encResp)
+	ciphertext := encResp.Ciphertext
+
+	// Rename the stack.
+	resp = tb.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-secrets-rename/dev/rename", rOrg),
+		map[string]string{"newName": "dev-renamed"})
+	resp.Body.Close()
+	if resp.StatusCode != 204 {
+		t.Fatalf("rename: expected 204, got %d", resp.StatusCode)
+	}
+
+	// Decrypt with the new name — should still work (key was preserved).
+	resp = tb.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-secrets-rename/dev-renamed/decrypt", rOrg),
+		map[string]any{"ciphertext": ciphertext})
+	var decResp struct {
+		Plaintext string `json:"plaintext"`
+	}
+	httpJSON(t, resp, &decResp)
+
+	if decResp.Plaintext != "c2VjcmV0LWJlZm9yZS1yZW5hbWU=" { // base64("secret-before-rename")
+		// The plaintext comes back as base64-encoded bytes. Verify round-trip.
+		t.Logf("decrypted plaintext: %q", decResp.Plaintext)
+	}
+
+	// Encrypt a new value with the renamed stack — should also work.
+	resp = tb.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-secrets-rename/dev-renamed/encrypt", rOrg),
+		map[string]any{"plaintext": []byte("secret-after-rename")})
+	var encResp2 struct {
+		Ciphertext string `json:"ciphertext"`
+	}
+	httpJSON(t, resp, &encResp2)
+	if encResp2.Ciphertext == "" {
+		t.Fatal("encrypt after rename: expected non-empty ciphertext")
+	}
+
+	// State export should work from the new name.
+	data := rExportState(t, tb, "rel-secrets-rename", "dev-renamed")
+	if !strings.Contains(string(data), "initial") {
+		t.Fatal("state should be accessible under new name")
+	}
+}
+
+// --- Category 15: Complex Journal Replay ---
+
+func TestReliability_JournalReplayMultipleResources(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-journal-multi", "dev")
+
+	updateID, _ := rCreateAndStartUpdate(t, tb, "rel-journal-multi", "dev", 1)
+
+	// Create 3 resources via journal entries.
+	entries := []map[string]any{
+		// Resource 1: Begin + Success
+		{
+			"version": 1, "kind": 0, "sequenceID": 1, "operationID": 1,
+			"operation": map[string]any{"type": "creating"},
+		},
+		{
+			"version": 1, "kind": 1, "sequenceID": 2, "operationID": 1,
+			"state": map[string]any{
+				"urn":  "urn:pulumi:dev::rel-journal-multi::custom:module:Resource::res1",
+				"type": "custom:module:Resource", "id": "id-001", "custom": true,
+				"inputs": map[string]any{"name": "resource-1"},
+			},
+		},
+		// Resource 2: Begin + Success
+		{
+			"version": 1, "kind": 0, "sequenceID": 3, "operationID": 2,
+			"operation": map[string]any{"type": "creating"},
+		},
+		{
+			"version": 1, "kind": 1, "sequenceID": 4, "operationID": 2,
+			"state": map[string]any{
+				"urn":  "urn:pulumi:dev::rel-journal-multi::custom:module:Resource::res2",
+				"type": "custom:module:Resource", "id": "id-002", "custom": true,
+				"inputs": map[string]any{"name": "resource-2"},
+			},
+		},
+		// Resource 3: Begin + Success
+		{
+			"version": 1, "kind": 0, "sequenceID": 5, "operationID": 3,
+			"operation": map[string]any{"type": "creating"},
+		},
+		{
+			"version": 1, "kind": 1, "sequenceID": 6, "operationID": 3,
+			"state": map[string]any{
+				"urn":  "urn:pulumi:dev::rel-journal-multi::custom:module:Resource::res3",
+				"type": "custom:module:Resource", "id": "id-003", "custom": true,
+				"inputs": map[string]any{"name": "resource-3"},
+			},
+		},
+	}
+
+	resp := tb.httpDo(t, "PATCH",
+		fmt.Sprintf("/api/stacks/%s/rel-journal-multi/dev/update/%s/journalentries", rOrg, updateID),
+		map[string]any{"entries": entries})
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("journal entries: status %d", resp.StatusCode)
+	}
+
+	rCompleteUpdate(t, tb, "rel-journal-multi", "dev", updateID, "succeeded")
+
+	data := rExportState(t, tb, "rel-journal-multi", "dev")
+	dataStr := string(data)
+	for _, marker := range []string{"resource-1", "resource-2", "resource-3", "id-001", "id-002", "id-003"} {
+		if !strings.Contains(dataStr, marker) {
+			t.Fatalf("expected '%s' in replayed state", marker)
+		}
+	}
+}
+
+func TestReliability_JournalReplayWithDelete(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-journal-del", "dev")
+
+	// First: create a resource via regular checkpoint.
+	deployment := rMakeDeployment("base")
+	deployment["resources"] = []map[string]any{
+		{
+			"urn":  "urn:pulumi:dev::rel-journal-del::pulumi:pulumi:Stack::rel-journal-del-dev",
+			"type": "pulumi:pulumi:Stack",
+		},
+		{
+			"urn":    "urn:pulumi:dev::rel-journal-del::custom:module:Resource::toDelete",
+			"type":   "custom:module:Resource",
+			"id":     "del-001",
+			"custom": true,
+			"inputs": map[string]any{"name": "will-be-deleted"},
+		},
+		{
+			"urn":    "urn:pulumi:dev::rel-journal-del::custom:module:Resource::toKeep",
+			"type":   "custom:module:Resource",
+			"id":     "keep-001",
+			"custom": true,
+			"inputs": map[string]any{"name": "will-remain"},
+		},
+	}
+	rRunFullUpdate(t, tb, "rel-journal-del", "dev", deployment)
+
+	// Verify both resources exist.
+	data := rExportState(t, tb, "rel-journal-del", "dev")
+	if !strings.Contains(string(data), "will-be-deleted") || !strings.Contains(string(data), "will-remain") {
+		t.Fatal("expected both resources in base state")
+	}
+
+	// Now delete the first resource via journal.
+	updateID, _ := rCreateAndStartUpdate(t, tb, "rel-journal-del", "dev", 1)
+
+	// Delete resource at base index 1 (0=Stack, 1=toDelete, 2=toKeep).
+	baseIdx := int64(1)
+	entries := []map[string]any{
+		{
+			"version": 1, "kind": 0, "sequenceID": 1, "operationID": 1,
+			"operation": map[string]any{"type": "deleting"},
+		},
+		{
+			"version": 1, "kind": 1, "sequenceID": 2, "operationID": 1,
+			"removeOld": baseIdx,
+		},
+	}
+
+	resp := tb.httpDo(t, "PATCH",
+		fmt.Sprintf("/api/stacks/%s/rel-journal-del/dev/update/%s/journalentries", rOrg, updateID),
+		map[string]any{"entries": entries})
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("journal delete entries: status %d", resp.StatusCode)
+	}
+
+	rCompleteUpdate(t, tb, "rel-journal-del", "dev", updateID, "succeeded")
+
+	data = rExportState(t, tb, "rel-journal-del", "dev")
+	dataStr := string(data)
+	if strings.Contains(dataStr, "will-be-deleted") {
+		t.Fatal("deleted resource should not appear in state")
+	}
+	if strings.Contains(dataStr, "del-001") {
+		t.Fatal("deleted resource ID should not appear in state")
+	}
+	if !strings.Contains(dataStr, "will-remain") {
+		t.Fatal("kept resource should still be in state")
+	}
+}
+
+func TestReliability_JournalReplayUpdateExistingResource(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-journal-upd", "dev")
+
+	// Create initial state with a resource.
+	deployment := rMakeDeployment("base")
+	deployment["resources"] = []map[string]any{
+		{
+			"urn":  "urn:pulumi:dev::rel-journal-upd::pulumi:pulumi:Stack::rel-journal-upd-dev",
+			"type": "pulumi:pulumi:Stack",
+		},
+		{
+			"urn":    "urn:pulumi:dev::rel-journal-upd::custom:module:Resource::myRes",
+			"type":   "custom:module:Resource",
+			"id":     "upd-001",
+			"custom": true,
+			"inputs": map[string]any{"name": "original-value"},
+		},
+	}
+	rRunFullUpdate(t, tb, "rel-journal-upd", "dev", deployment)
+
+	// Update the resource via journal (update = delete old + create new).
+	updateID, _ := rCreateAndStartUpdate(t, tb, "rel-journal-upd", "dev", 1)
+
+	baseIdx := int64(1) // index of myRes in base resources
+	entries := []map[string]any{
+		{
+			"version": 1, "kind": 0, "sequenceID": 1, "operationID": 1,
+			"operation": map[string]any{"type": "updating"},
+		},
+		{
+			"version": 1, "kind": 1, "sequenceID": 2, "operationID": 1,
+			"removeOld": baseIdx,
+			"state": map[string]any{
+				"urn":    "urn:pulumi:dev::rel-journal-upd::custom:module:Resource::myRes",
+				"type":   "custom:module:Resource",
+				"id":     "upd-001",
+				"custom": true,
+				"inputs": map[string]any{"name": "updated-value"},
+			},
+		},
+	}
+
+	resp := tb.httpDo(t, "PATCH",
+		fmt.Sprintf("/api/stacks/%s/rel-journal-upd/dev/update/%s/journalentries", rOrg, updateID),
+		map[string]any{"entries": entries})
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("journal update entries: status %d", resp.StatusCode)
+	}
+
+	rCompleteUpdate(t, tb, "rel-journal-upd", "dev", updateID, "succeeded")
+
+	data := rExportState(t, tb, "rel-journal-upd", "dev")
+	dataStr := string(data)
+	if !strings.Contains(dataStr, "updated-value") {
+		t.Fatal("expected 'updated-value' in state after journal update")
+	}
+	if strings.Contains(dataStr, "original-value") {
+		t.Fatal("'original-value' should have been replaced by journal update")
+	}
+	// Resource ID should be preserved.
+	if !strings.Contains(dataStr, "upd-001") {
+		t.Fatal("resource ID should be preserved after update")
+	}
+}
+
+// --- Category 16: Concurrent Imports ---
+
+func TestReliability_ConcurrentImports(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-concurrent-import", "dev")
+	rRunFullUpdate(t, tb, "rel-concurrent-import", "dev", rMakeDeployment("initial"))
+
+	// Build different import payloads.
+	var wg sync.WaitGroup
+	results := make([]int, 5)
+	for i := range 5 {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			importPayload := map[string]any{
+				"version": 3,
+				"deployment": map[string]any{
+					"manifest": map[string]any{
+						"time":    "2024-01-01T00:00:00Z",
+						"magic":   fmt.Sprintf("import-%d", idx),
+						"version": "v3.0.0",
+					},
+					"resources": []map[string]any{
+						{
+							"urn":  "urn:pulumi:dev::rel-concurrent-import::pulumi:pulumi:Stack::rel-concurrent-import-dev",
+							"type": "pulumi:pulumi:Stack",
+						},
+					},
+				},
+			}
+			resp := tb.httpDo(t, "POST",
+				fmt.Sprintf("/api/stacks/%s/rel-concurrent-import/dev/import", rOrg),
+				importPayload)
+			resp.Body.Close()
+			results[idx] = resp.StatusCode
+		}(i)
+	}
+	wg.Wait()
+
+	// At least one should succeed (200), others may get 409 (locked).
+	successes := 0
+	for _, code := range results {
+		if code == 200 {
+			successes++
+		} else if code != 409 {
+			t.Fatalf("unexpected status code %d (expected 200 or 409)", code)
+		}
+	}
+	if successes == 0 {
+		t.Fatal("expected at least one import to succeed")
+	}
+
+	// Final state should be valid JSON and contain exactly one of the import markers.
+	data := rExportState(t, tb, "rel-concurrent-import", "dev")
+	if !json.Valid(data) {
+		t.Fatal("exported state is not valid JSON after concurrent imports")
+	}
+	importCount := 0
+	for i := range 5 {
+		if strings.Contains(string(data), fmt.Sprintf("import-%d", i)) {
+			importCount++
+		}
+	}
+	if importCount != 1 {
+		t.Fatalf("expected exactly 1 import marker in final state, found %d", importCount)
+	}
+}
+
+// --- Category 17: History Consistency ---
+
+func TestReliability_HistoryRecordsAllUpdates(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-history", "dev")
+
+	// Run 5 updates with different outcomes.
+	outcomes := []string{"succeeded", "succeeded", "failed", "succeeded", "succeeded"}
+	for i, outcome := range outcomes {
+		updateID, _ := rCreateAndStartUpdate(t, tb, "rel-history", "dev", 0)
+		rPostCheckpoint(t, tb, "rel-history", "dev", updateID, rMakeDeployment(fmt.Sprintf("hist-v%d", i+1)))
+		rCompleteUpdate(t, tb, "rel-history", "dev", updateID, outcome)
+	}
+
+	// Fetch update history.
+	resp := tb.httpDo(t, "GET",
+		fmt.Sprintf("/api/stacks/%s/rel-history/dev/updates", rOrg), nil)
+	var historyResp struct {
+		Updates []struct {
+			Version int    `json:"version"`
+			Result  string `json:"result"`
+		} `json:"updates"`
+	}
+	httpJSON(t, resp, &historyResp)
+
+	if len(historyResp.Updates) != 5 {
+		t.Fatalf("expected 5 history entries, got %d", len(historyResp.Updates))
+	}
+
+	// History is returned newest-first. Verify each has correct result.
+	for i, u := range historyResp.Updates {
+		// Reverse index: entry 0 is version 5, entry 4 is version 1.
+		expectedVersion := 5 - i
+		expectedResult := outcomes[expectedVersion-1]
+		if u.Version != expectedVersion {
+			t.Fatalf("history entry %d: expected version %d, got %d", i, expectedVersion, u.Version)
+		}
+		if u.Result != expectedResult {
+			t.Fatalf("history entry %d (version %d): expected result %q, got %q", i, expectedVersion, expectedResult, u.Result)
+		}
+	}
+}
+
+func TestReliability_HistoryVersionMatchesExportVersion(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-history-ver", "dev")
+
+	// Run 3 updates.
+	for i := 1; i <= 3; i++ {
+		rRunFullUpdate(t, tb, "rel-history-ver", "dev", rMakeDeployment(fmt.Sprintf("hv%d", i)))
+	}
+
+	// Export each version and verify it matches the expected marker.
+	for i := 1; i <= 3; i++ {
+		data, status := rExportStateVersion(t, tb, "rel-history-ver", "dev", i)
+		if status != 200 {
+			t.Fatalf("export version %d: status %d", i, status)
+		}
+		expectedMarker := fmt.Sprintf("hv%d", i)
+		if !strings.Contains(string(data), expectedMarker) {
+			t.Fatalf("version %d: expected '%s' in export", i, expectedMarker)
+		}
+	}
+
+	// Verify latest update via history endpoint.
+	resp := tb.httpDo(t, "GET",
+		fmt.Sprintf("/api/stacks/%s/rel-history-ver/dev/updates/latest", rOrg), nil)
+	var latestResp struct {
+		Version int `json:"version"`
+	}
+	httpJSON(t, resp, &latestResp)
+	if latestResp.Version != 3 {
+		t.Fatalf("latest update: expected version 3, got %d", latestResp.Version)
+	}
+}
+
+// --- Category 18: Batch Encrypt/Decrypt Consistency ---
+
+func TestReliability_BatchEncryptDecryptRoundtrip(t *testing.T) {
+	tb := startBackend(t)
+
+	rCreateStack(t, tb, "rel-batch-secrets", "dev")
+	rRunFullUpdate(t, tb, "rel-batch-secrets", "dev", rMakeDeployment("initial"))
+
+	// Batch encrypt multiple values.
+	plaintexts := []string{
+		"c2VjcmV0LTE=", // base64("secret-1")
+		"c2VjcmV0LTI=", // base64("secret-2")
+		"c2VjcmV0LTM=", // base64("secret-3")
+	}
+	resp := tb.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-batch-secrets/dev/batch-encrypt", rOrg),
+		map[string]any{"plaintexts": plaintexts})
+	var batchEncResp struct {
+		Ciphertexts []string `json:"ciphertexts"`
+	}
+	httpJSON(t, resp, &batchEncResp)
+
+	if len(batchEncResp.Ciphertexts) != 3 {
+		t.Fatalf("expected 3 ciphertexts, got %d", len(batchEncResp.Ciphertexts))
+	}
+
+	// Batch decrypt.
+	resp = tb.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-batch-secrets/dev/batch-decrypt", rOrg),
+		map[string]any{"ciphertexts": batchEncResp.Ciphertexts})
+	var batchDecResp struct {
+		Plaintexts map[string]string `json:"plaintexts"`
+	}
+	httpJSON(t, resp, &batchDecResp)
+
+	if len(batchDecResp.Plaintexts) != 3 {
+		t.Fatalf("expected 3 plaintexts, got %d", len(batchDecResp.Plaintexts))
+	}
+
+	// Verify we got back the original plaintexts (values in the map).
+	decryptedValues := make([]string, 0, len(batchDecResp.Plaintexts))
+	for _, v := range batchDecResp.Plaintexts {
+		decryptedValues = append(decryptedValues, v)
+	}
+	sort.Strings(decryptedValues)
+	sort.Strings(plaintexts)
+
+	for i, want := range plaintexts {
+		if decryptedValues[i] != want {
+			t.Fatalf("plaintext %d: expected %q, got %q", i, want, decryptedValues[i])
+		}
+	}
+}

@@ -143,13 +143,31 @@ High-frequency machine-generated operations (checkpoints, journal entries, event
 
 ```bash
 go test ./internal/...                                    # unit tests
-go test -timeout 120s ./tests/ -count=1                   # API + auth tests (CLI tests auto-skip if pulumi not in PATH)
+go test -timeout 120s ./tests/ -count=1                   # API + auth + reliability tests (CLI tests auto-skip if pulumi not in PATH)
 go test -v ./tests/ -run TestAPISpecSchemaCompliance       # OpenAPI spec compliance
 go test -v ./tests/ -run TestCLIErrorSemantics             # CLI error message compatibility
 go test -v ./tests/ -run TestDeclaredErrorCodes            # error code coverage + exercised
+go test -v ./tests/ -run TestReliability                   # state consistency / reliability tests
 go test -bench . -benchmem ./internal/engine               # engine benchmarks
 go test -timeout 600s ./tests/ -count=1                    # full suite (with pulumi in PATH)
 ```
+
+### Reliability tests
+
+The `tests/reliability_test.go` suite covers state consistency edge cases:
+
+- Partial apply / failed update recovery
+- State version integrity and pruning
+- Delta checkpoint correctness (patching, hash mismatch, empty state)
+- Journal replay (create, update, delete, pending operations, multi-resource)
+- Verbatim checkpoint mode and mixed checkpoint mode transitions (Full → Verbatim → Delta → Full)
+- Locking & lease edge cases (double start, checkpoint/complete after cancel)
+- Concurrent operations (parallel checkpoints, concurrent read/write, concurrent imports)
+- Stack lifecycle (recreation after deletion, operations during active updates, secrets after rename)
+- Secrets consistency (encrypt/decrypt roundtrip, batch operations, key preservation across rename)
+- History consistency (all updates recorded, version/export alignment)
+- Error response format and information leakage (no UUIDs, SQL internals, Go paths in messages)
+- Declared error code coverage (meta-test verifies every `Errors: []int{...}` has a test scenario)
 
 GCP-dependent tests (`TestGoogleAuthE2E`, `TestGroupsResolutionADC`) require Google credentials and auto-skip when env vars are not set.
 

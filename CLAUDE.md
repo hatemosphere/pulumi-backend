@@ -20,12 +20,13 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | Path | Purpose |
 |---|---|
 | `cmd/pulumi-backend/main.go` | Entry point, wiring |
-| `internal/api/router.go` | Server, huma config, all middleware (auth, RBAC, metrics, logging) |
+| `internal/api/router.go` | Server, huma config, all middleware (auth, RBAC, metrics, logging, audit) |
 | `internal/api/types.go` | All huma request/response structs |
-| `internal/api/errors.go` | Custom PulumiError overriding huma defaults |
+| `internal/api/errors.go` | Custom PulumiError overriding huma defaults + shared handler helpers (`internalError`, `conflictOrInternalError`, `requireIdentity`, `copyBody`, `ptrString`) |
 | `internal/api/tokens.go` | User token self-service (GET/POST/DELETE /api/user/tokens) |
 | `internal/api/org.go` | Read-only teams/roles from RBAC config |
 | `internal/api/openapi.go` | OpenAPI spec builder (huma -> kin-openapi) |
+| `internal/audit/audit.go` | Shared structured audit logging (`audit.Event` struct with typed fields) |
 | `internal/auth/jwt.go` | JWT authenticator (HMAC/RSA/ECDSA auto-detection) |
 | `internal/auth/rbac.go` | RBAC resolver (group roles + stack policies) |
 | `internal/auth/rbac_config.go` | RBAC YAML config + Permission types |
@@ -40,7 +41,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | `internal/storage/sqlite.go` | SQLite implementation (inline schema) |
 | `internal/storage/storage.go` | `Store` interface + data types |
 | `tests/spec_test.go` | OpenAPI spec compliance vs upstream + CLI error semantics |
-| `tests/reliability_test.go` | State guards, error format, concurrency, delta/journal correctness, error code validation |
+| `tests/reliability_test.go` | State consistency, error format, concurrency, checkpoint modes, journal replay, secrets, error code coverage |
 | `tests/auth_integration_test.go` | Auth + RBAC integration tests |
 
 ## Reference code
@@ -53,9 +54,10 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 ```bash
 go build -o pulumi-backend ./cmd/pulumi-backend
 go test ./internal/...                                    # unit tests
-go test -timeout 120s ./tests/ -count=1                   # API + auth tests (CLI/GCP tests auto-skip)
+go test -timeout 120s ./tests/ -count=1                   # API + auth + reliability tests (CLI/GCP tests auto-skip)
 go test -v -timeout 600s ./tests/ -count=1                # all tests including CLI (needs pulumi in PATH)
 go test -v -run TestAPISpecSchemaCompliance ./tests/      # spec compliance
+go test -v -run TestReliability ./tests/                  # state consistency / reliability tests
 go test -bench . -benchmem ./internal/engine              # run engine benchmarks (not in CI)
 go test -timeout 600s ./tests/ -count=1                   # full suite
 golangci-lint run ./...                                   # lint
@@ -69,7 +71,8 @@ golangci-lint run ./...                                   # lint
 - **huma config**: `AllowAdditionalPropertiesByDefault=true`, `FieldsOptionalByDefault=true`
 - **RawBody caution**: huma pools request body buffers. Any `RawBody []byte` stored beyond handler lifetime must be copied (`make + copy`).
 - **Middleware architecture**: HTTP-level (realIP, recoverer, requestLogger, gzipDecompressor) + huma-level (metricsHumaMiddleware, authHumaMiddleware, rbacMiddleware, auditHumaMiddleware). Two huma API instances on the same mux: publicAPI (no auth) and api (auth + RBAC).
-- **Audit logging**: huma-level `auditHumaMiddleware` emits structured JSON audit entries for all state-mutating operations (POST/PATCH/PUT/DELETE) with actor, action (operationID), resource, http_status, ip_address. High-frequency ops excluded (checkpoints, events, lease renewals). Inline audit entries for login, token exchange, and RBAC denials. All entries use `slog.Group("audit", ...)` format.
+- **Audit logging**: Shared `internal/audit` package with typed `audit.Event` struct. huma-level `auditHumaMiddleware` emits structured JSON audit entries for all state-mutating operations (POST/PATCH/PUT/DELETE) with actor, action (operationID), resource, http_status, ip_address. High-frequency ops excluded (checkpoints, events, lease renewals). Inline audit entries for login, token exchange, and RBAC denials. All entries use `slog.Group("audit", ...)` format.
+- **Shared handler helpers**: `errors.go` contains `internalError`, `conflictOrInternalError`, `requireIdentity`, `copyBody`, `ptrString` — used across all handler files to eliminate boilerplate.
 - SQLite: pure Go via `modernc.org/sqlite`, WAL mode, `MaxOpenConns=1`
 - Auth: four modes — `single-tenant` (any token = admin), `google` (Google OIDC via go-oidc/v3 + backend tokens + groups + browser login), `oidc` (generic OIDC provider), `jwt` (stateless, claims-based)
 - OIDC architecture: `OIDCAuthenticator` interface in `oidc.go`, Google mode is a specialization (`NewGoogleOIDCAuthenticator`). `TestOIDCValidator` + `TestOIDCRefresher` interfaces for test mock injection via `NewTestOIDCAuthenticator`.
