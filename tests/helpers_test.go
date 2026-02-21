@@ -26,6 +26,7 @@ type testBackend struct {
 	server  *http.Server
 	store   *storage.SQLiteStore
 	dataDir string
+	dbPath  string
 }
 
 // startBackend starts a fresh backend server on a random port with default options.
@@ -86,9 +87,69 @@ func startBackendWithConfig(t *testing.T, cfg backendConfig) *testBackend {
 		server:  httpServer,
 		store:   store,
 		dataDir: dataDir,
+		dbPath:  dbPath,
 	}
 
 	// Wait for server to be ready.
+	for i := 0; i < 50; i++ {
+		resp, err := http.Get(tb.URL + "/")
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Cleanup(func() {
+		_ = httpServer.Close()
+		_ = store.Close()
+	})
+	return tb
+}
+
+// startBackendWithDB starts a backend against an existing database with a specific master key.
+// Used for testing restart scenarios (e.g. master key persistence).
+func startBackendWithDB(t *testing.T, dbPath string, masterKey []byte) *testBackend {
+	t.Helper()
+
+	audit.Enabled = false
+	t.Cleanup(func() { audit.Enabled = true })
+
+	store, err := storage.NewSQLiteStore(dbPath, storage.SQLiteStoreConfig{})
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+
+	provider, err := engine.NewLocalSecretsProvider(masterKey)
+	if err != nil {
+		t.Fatalf("failed to create secrets provider: %v", err)
+	}
+	secrets := engine.NewSecretsEngine(provider)
+
+	mgr, err := engine.NewManager(store, secrets, engine.ManagerConfig{})
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+
+	srv := api.NewServer(mgr, "organization", "test-user")
+	router := srv.Router()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	httpServer := &http.Server{Handler: router, ReadHeaderTimeout: 10 * time.Second} //nolint:gosec // test server
+	go func() { _ = httpServer.Serve(listener) }()
+
+	tb := &testBackend{
+		URL:     fmt.Sprintf("http://127.0.0.1:%d", port),
+		server:  httpServer,
+		store:   store,
+		dataDir: filepath.Dir(dbPath),
+	}
+
 	for i := 0; i < 50; i++ {
 		resp, err := http.Get(tb.URL + "/")
 		if err == nil {

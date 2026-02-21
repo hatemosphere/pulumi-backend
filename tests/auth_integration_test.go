@@ -70,6 +70,7 @@ func startBackendWithOpts(t *testing.T, opts ...api.ServerOption) *testBackend {
 		server:  httpServer,
 		store:   store,
 		dataDir: dataDir,
+		dbPath:  dbPath,
 	}
 
 	t.Cleanup(func() {
@@ -622,6 +623,7 @@ func newOIDCBackend(t *testing.T, rbacConfig *auth.RBACConfig, groups map[string
 		server:  httpServer,
 		store:   store,
 		dataDir: dataDir,
+		dbPath:  dbPath,
 	}
 
 	t.Cleanup(func() {
@@ -719,6 +721,7 @@ func newOIDCBackendWithRefresher(t *testing.T, rbacConfig *auth.RBACConfig, grou
 		server:  httpServer,
 		store:   store,
 		dataDir: dataDir,
+		dbPath:  dbPath,
 	}
 
 	t.Cleanup(func() {

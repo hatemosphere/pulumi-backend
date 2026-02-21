@@ -83,7 +83,9 @@ golangci-lint run ./...                                   # lint
 - User token endpoints: `GET/POST/DELETE /api/user/tokens` — self-service token management via `registerUserTokens`, gated on `s.tokenStore != nil`
 - Teams/roles endpoints: `GET /api/orgs/{orgName}/teams`, `GET /api/orgs/{orgName}/teams/{teamName}`, `GET /api/orgs/{orgName}/roles` — read-only mapping of RBAC YAML config to upstream-shaped responses via `registerOrg`
 - RBAC: group-based with stack-level policy overrides. Permission levels: `none < read < write < admin`. Admin RBAC role grants access to admin endpoints too.
-- Secrets: per-stack AES-256-GCM keys wrapped by master key (local) or GCP KMS
+- Secrets: per-stack AES-256-GCM keys wrapped by master key (local) or GCP KMS. Master key verified on startup via encrypted canary stored in `server_config` table — wrong key = fatal error instead of silent corruption.
+- **Audit logging**: `audit.Enabled` flag (default true) controls all audit output. Disable with `-audit-logs=false` or `PULUMI_BACKEND_AUDIT_LOGS=false`. Suppressed in test helpers.
+- **Log format**: `-log-format` flag (`json` default, `text` for local dev) + `PULUMI_BACKEND_LOG_FORMAT` env var.
 - Deployments: gzip-compressed in DB, zero-copy gzip export when client accepts it
 - Leases: in-memory `sync.Map` + SQLite; lost on restart
 - State versions: pruned to last N (default 50) per stack

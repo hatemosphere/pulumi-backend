@@ -297,9 +297,10 @@ func Parse() *Config {
 			os.Exit(1)
 		}
 		c.MasterKey = hex.EncodeToString(key)
-		fmt.Fprintf(os.Stderr, "WARNING: auto-generated master key (secrets will be lost on restart unless you persist this):\n")
+		fmt.Fprintf(os.Stderr, "WARNING: auto-generated master key (will not survive restart unless you persist it):\n")
 		fmt.Fprintf(os.Stderr, "  export PULUMI_BACKEND_MASTER_KEY=%s\n\n", c.MasterKey)
 	}
+
 	return c
 }
 

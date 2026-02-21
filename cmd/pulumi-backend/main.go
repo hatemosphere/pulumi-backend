@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -71,6 +73,10 @@ func main() {
 		localProvider, err := engine.NewLocalSecretsProvider(masterKey)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to create local secrets provider: %v\n", err)
+			os.Exit(1)
+		}
+		if err := verifyMasterKey(store, localProvider); err != nil {
+			fmt.Fprintf(os.Stderr, "master key verification failed: %v\n", err)
 			os.Exit(1)
 		}
 		secretsProvider = localProvider
@@ -284,4 +290,49 @@ func main() {
 	mgr.Shutdown()
 	store.Close()
 	slog.Info("shutdown complete")
+}
+
+// canaryPlaintext is a known value used to verify the master key on startup.
+const canaryPlaintext = "pulumi-backend-master-key-canary"
+
+// verifyMasterKey checks that the current master key can decrypt a previously
+// stored canary value. On first run (no canary in DB), it creates one. On
+// subsequent runs, it verifies decryption succeeds — a mismatch means the
+// wrong key was provided, and all secrets would be undecryptable.
+func verifyMasterKey(store *storage.SQLiteStore, provider *engine.LocalSecretsProvider) error {
+	ctx := context.Background()
+
+	storedCanary, err := store.GetConfig(ctx, "master_key_canary")
+	if err != nil {
+		return fmt.Errorf("read canary from database: %w", err)
+	}
+
+	if storedCanary == "" {
+		// First run — encrypt and store the canary.
+		ciphertext, err := provider.WrapKey(ctx, []byte(canaryPlaintext))
+		if err != nil {
+			return fmt.Errorf("encrypt canary: %w", err)
+		}
+		canaryHex := hex.EncodeToString(ciphertext)
+		if err := store.SetConfig(ctx, "master_key_canary", canaryHex); err != nil {
+			return fmt.Errorf("store canary in database: %w", err)
+		}
+		slog.Info("master key canary stored (first run)")
+		return nil
+	}
+
+	// Subsequent run — verify the key can decrypt the canary.
+	ciphertext, err := hex.DecodeString(storedCanary)
+	if err != nil {
+		return fmt.Errorf("decode stored canary: %w", err)
+	}
+	plaintext, err := provider.UnwrapKey(ctx, ciphertext)
+	if err != nil {
+		return errors.New("wrong master key: cannot decrypt verification canary (did the key change?)")
+	}
+	if string(plaintext) != canaryPlaintext {
+		return errors.New("master key canary mismatch: decrypted value does not match expected canary")
+	}
+
+	return nil
 }

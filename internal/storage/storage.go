@@ -151,6 +151,10 @@ type Store interface {
 	SaveSecretsKey(ctx context.Context, org, project, stack string, encryptedKey []byte) error
 	GetSecretsKey(ctx context.Context, org, project, stack string) ([]byte, error)
 
+	// Server config (key-value metadata, e.g. master encryption key).
+	GetConfig(ctx context.Context, key string) (string, error)
+	SetConfig(ctx context.Context, key, value string) error
+
 	// Backup creates a consistent backup of the database at destPath using VACUUM INTO.
 	Backup(ctx context.Context, destPath string) error
 }

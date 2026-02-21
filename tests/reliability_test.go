@@ -2041,3 +2041,83 @@ func TestReliability_BatchEncryptDecryptRoundtrip(t *testing.T) {
 		}
 	}
 }
+
+// --- Category 19: Master Key Persistence Across Restarts ---
+
+func TestReliability_MasterKeyPersistence(t *testing.T) {
+	// Start first backend (auto-generated master key = all zeros in test helper).
+	tb1 := startBackend(t)
+
+	// Create a stack and encrypt a value.
+	rCreateStack(t, tb1, "rel-masterkey", "dev")
+	rRunFullUpdate(t, tb1, "rel-masterkey", "dev", rMakeDeployment("initial"))
+
+	plaintext := "c2VjcmV0LXZhbHVl" // base64("secret-value")
+	resp := tb1.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-masterkey/dev/encrypt", rOrg),
+		map[string]any{"plaintext": plaintext})
+	var encResp struct {
+		Ciphertext string `json:"ciphertext"`
+	}
+	httpJSON(t, resp, &encResp)
+	if encResp.Ciphertext == "" {
+		t.Fatal("expected non-empty ciphertext")
+	}
+
+	// Stop the first backend.
+	dbPath := tb1.dbPath
+	_ = tb1.server.Close()
+	_ = tb1.store.Close()
+
+	// Start a second backend against the SAME database with the SAME key.
+	// (Test helpers use a fixed all-zeros key, simulating "same key on restart".)
+	masterKey := make([]byte, 32)
+	tb2 := startBackendWithDB(t, dbPath, masterKey)
+
+	// Decrypt the ciphertext — must succeed with the same key.
+	resp = tb2.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-masterkey/dev/decrypt", rOrg),
+		map[string]any{"ciphertext": encResp.Ciphertext})
+	var decResp struct {
+		Plaintext string `json:"plaintext"`
+	}
+	httpJSON(t, resp, &decResp)
+	if decResp.Plaintext != plaintext {
+		t.Fatalf("expected plaintext %q after restart, got %q", plaintext, decResp.Plaintext)
+	}
+}
+
+func TestReliability_MasterKeyMismatchFails(t *testing.T) {
+	// Start first backend with default all-zeros key.
+	tb1 := startBackend(t)
+
+	rCreateStack(t, tb1, "rel-masterkey-bad", "dev")
+	rRunFullUpdate(t, tb1, "rel-masterkey-bad", "dev", rMakeDeployment("initial"))
+
+	plaintext := "c2VjcmV0LXZhbHVl"
+	resp := tb1.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-masterkey-bad/dev/encrypt", rOrg),
+		map[string]any{"plaintext": plaintext})
+	var encResp struct {
+		Ciphertext string `json:"ciphertext"`
+	}
+	httpJSON(t, resp, &encResp)
+
+	// Stop and restart with a DIFFERENT master key.
+	dbPath := tb1.dbPath
+	_ = tb1.server.Close()
+	_ = tb1.store.Close()
+
+	differentKey := make([]byte, 32)
+	differentKey[0] = 0xFF // Different from all-zeros.
+	tb2 := startBackendWithDB(t, dbPath, differentKey)
+
+	// Decrypt should fail (wrong key → 500).
+	resp = tb2.httpDo(t, "POST",
+		fmt.Sprintf("/api/stacks/%s/rel-masterkey-bad/dev/decrypt", rOrg),
+		map[string]any{"ciphertext": encResp.Ciphertext})
+	resp.Body.Close()
+	if resp.StatusCode == 200 {
+		t.Fatal("expected decrypt to fail with wrong master key, but got 200")
+	}
+}

@@ -74,6 +74,24 @@ func (s *SQLiteStore) Backup(ctx context.Context, destPath string) error {
 	return err
 }
 
+// --- Server config ---
+
+func (s *SQLiteStore) GetConfig(ctx context.Context, key string) (string, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM server_config WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return value, err
+}
+
+func (s *SQLiteStore) SetConfig(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO server_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key, value)
+	return err
+}
+
 func (s *SQLiteStore) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
@@ -192,6 +210,11 @@ CREATE TABLE IF NOT EXISTS tokens (
     created_at INTEGER NOT NULL,
     last_used_at INTEGER,
     expires_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS server_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_updates_stack ON updates(org_name, project_name, stack_name);

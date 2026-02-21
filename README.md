@@ -60,7 +60,9 @@ All flags have corresponding environment variables with the `PULUMI_BACKEND_` pr
 | `-log-format` | `PULUMI_BACKEND_LOG_FORMAT` | `json` | Log format: `json` or `text` |
 | `-audit-logs` | `PULUMI_BACKEND_AUDIT_LOGS` | `true` | Enable structured audit logging |
 
-If no master key is provided, one is auto-generated and printed to stderr. Persist it if you want secrets to survive restarts.
+If no master key is provided, one is auto-generated and printed to stderr. **You must persist it** (e.g. `export PULUMI_BACKEND_MASTER_KEY=...`) — secrets will be undecryptable on restart with a different key.
+
+On startup, the backend verifies the master key by decrypting a canary value stored in the database. If the key is wrong, the server refuses to start with a clear error message instead of silently corrupting secrets.
 
 #### Performance tuning
 
