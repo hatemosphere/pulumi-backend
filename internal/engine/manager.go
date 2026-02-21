@@ -412,7 +412,7 @@ func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[str
 
 	// Acquire stack lock.
 	if !m.tryAcquireStackLock(u.OrgName, u.ProjectName, u.StackName, updateID) {
-		return nil, errors.New("stack is locked by another update")
+		return nil, ErrStackHasActiveUpdate
 	}
 
 	// Get next version.

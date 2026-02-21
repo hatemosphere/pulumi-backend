@@ -13,7 +13,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 - **auth/** — Authentication (single-tenant, Google OIDC, generic OIDC, JWT), RBAC resolver, groups cache
 - **engine/** — Business logic: stack locks, LRU cache, delta/journal replay, AES-256-GCM secrets
 - **storage/** — `Store` interface + SQLite impl. Deployments stored gzip-compressed.
-- **config/** — Flag + env var parsing (`PULUMI_BACKEND_*` prefix)
+- **config/** — Flag + env var parsing via [ff/v3](https://github.com/peterbourgon/ff) (`PULUMI_BACKEND_*` prefix, auto-mapped from flag names)
 
 ## Key files
 
@@ -38,7 +38,8 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | `internal/engine/journal.go` | Journal replay algorithm |
 | `internal/engine/delta.go` | Byte-offset delta application |
 | `internal/engine/aesgcm.go` | Shared AES-256-GCM seal/open helpers |
-| `internal/storage/sqlite.go` | SQLite implementation (inline schema) |
+| `internal/engine/secrets_provider.go` | `SecretsProvider` interface + local/KMS implementations |
+| `internal/storage/sqlite.go` | SQLite implementation (inline schema, includes `server_config` + `secrets_keys` tables) |
 | `internal/storage/storage.go` | `Store` interface + data types |
 | `tests/spec_test.go` | OpenAPI spec compliance vs upstream + CLI error semantics |
 | `tests/reliability_test.go` | State consistency, error format, concurrency, checkpoint modes, journal replay, secrets, error code coverage |
@@ -48,6 +49,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 
 - `reference/pulumi/` — Upstream Pulumi source clone (for API shape reference)
 - `reference/dex/` — Dex OIDC connector reference (Google connector refresh token pattern)
+- `reference/ff/` — ff library source (flags-first config parsing)
 
 ## Build & test
 
@@ -83,7 +85,9 @@ golangci-lint run ./...                                   # lint
 - User token endpoints: `GET/POST/DELETE /api/user/tokens` — self-service token management via `registerUserTokens`, gated on `s.tokenStore != nil`
 - Teams/roles endpoints: `GET /api/orgs/{orgName}/teams`, `GET /api/orgs/{orgName}/teams/{teamName}`, `GET /api/orgs/{orgName}/roles` — read-only mapping of RBAC YAML config to upstream-shaped responses via `registerOrg`
 - RBAC: group-based with stack-level policy overrides. Permission levels: `none < read < write < admin`. Admin RBAC role grants access to admin endpoints too.
-- Secrets: per-stack AES-256-GCM keys wrapped by master key (local) or GCP KMS. Master key verified on startup via encrypted canary stored in `server_config` table — wrong key = fatal error instead of silent corruption.
+- **Config parsing**: `ff/v3` wraps stdlib `flag.FlagSet` with automatic env var binding via `WithEnvVarPrefix("PULUMI_BACKEND")`. Flag `foo-bar` → env `PULUMI_BACKEND_FOO_BAR`. All flags get env overrides automatically; no manual `os.Getenv` code. Post-parse logic (master key auto-gen) runs after `ff.Parse`.
+- **Secrets**: per-stack AES-256-GCM DEKs wrapped by KEK (master key for local provider, or GCP KMS). `SecretsProvider` interface: `WrapKey`, `UnwrapKey`, `ProviderName`. Canary verification on startup: encrypt known plaintext, store ciphertext in `server_config` table; on restart, decrypt to verify — wrong key/KMS = fatal error.
+- **Secrets key migration**: `--migrate-secrets-key` flag re-wraps all per-stack DEKs from old provider to new provider, then exits. Supports local↔KMS and key rotation within same provider. Uses `--old-secrets-provider`, `--old-master-key`, `--old-kms-key` flags.
 - **Audit logging**: `audit.Enabled` flag (default true) controls all audit output. Disable with `-audit-logs=false` or `PULUMI_BACKEND_AUDIT_LOGS=false`. Suppressed in test helpers.
 - **Log format**: `-log-format` flag (`json` default, `text` for local dev) + `PULUMI_BACKEND_LOG_FORMAT` env var.
 - Deployments: gzip-compressed in DB, zero-copy gzip export when client accepts it

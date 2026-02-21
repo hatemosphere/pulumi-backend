@@ -43,7 +43,7 @@ pulumi login http://localhost:8080  # opens browser for OIDC sign-in
 
 ### Configuration
 
-All flags have corresponding environment variables with the `PULUMI_BACKEND_` prefix.
+All flags have corresponding environment variables with the `PULUMI_BACKEND_` prefix (auto-mapped: hyphens become underscores, uppercased). Powered by [ff](https://github.com/peterbourgon/ff). Precedence: flag > env var > default.
 
 #### Core
 
@@ -54,9 +54,9 @@ All flags have corresponding environment variables with the `PULUMI_BACKEND_` pr
 | `-master-key` | `PULUMI_BACKEND_MASTER_KEY` | (auto-generated) | Hex-encoded 32-byte key for secrets encryption |
 | `-org` | `PULUMI_BACKEND_ORG` | `organization` | Default organization name |
 | `-user` | `PULUMI_BACKEND_USER` | `admin` | Default user name |
-| `-tls` | | `false` | Enable TLS |
-| `-cert` | | | TLS certificate file |
-| `-key` | | | TLS key file |
+| `-tls` | `PULUMI_BACKEND_TLS` | `false` | Enable TLS |
+| `-cert` | `PULUMI_BACKEND_CERT` | | TLS certificate file |
+| `-key` | `PULUMI_BACKEND_KEY` | | TLS key file |
 | `-log-format` | `PULUMI_BACKEND_LOG_FORMAT` | `json` | Log format: `json` or `text` |
 | `-audit-logs` | `PULUMI_BACKEND_AUDIT_LOGS` | `true` | Enable structured audit logging |
 
@@ -84,6 +84,42 @@ On startup, the backend verifies the master key by decrypting a canary value sto
 |---|---|---|---|
 | `-secrets-provider` | `PULUMI_BACKEND_SECRETS_PROVIDER` | `local` | `local` (AES-256-GCM with master key) or `gcpkms` |
 | `-kms-key` | `PULUMI_BACKEND_KMS_KEY` | | GCP KMS key resource name (required for `gcpkms`) |
+
+#### Secrets key migration
+
+Re-wrap all per-stack encryption keys from an old provider to a new one. The backend performs the migration and exits.
+
+```bash
+# Rotate local master key
+./pulumi-backend --db pulumi-backend.db \
+  --migrate-secrets-key \
+  --master-key NEW_HEX_KEY \
+  --old-secrets-provider local \
+  --old-master-key OLD_HEX_KEY
+
+# Migrate from local to GCP KMS
+./pulumi-backend --db pulumi-backend.db \
+  --migrate-secrets-key \
+  --secrets-provider gcpkms \
+  --kms-key projects/P/locations/L/keyRings/R/cryptoKeys/K \
+  --old-secrets-provider local \
+  --old-master-key OLD_HEX_KEY
+
+# Migrate from GCP KMS to local
+./pulumi-backend --db pulumi-backend.db \
+  --migrate-secrets-key \
+  --secrets-provider local \
+  --master-key NEW_HEX_KEY \
+  --old-secrets-provider gcpkms \
+  --old-kms-key projects/P/locations/L/keyRings/R/cryptoKeys/K
+```
+
+| Flag | Env | Description |
+|---|---|---|
+| `--migrate-secrets-key` | `PULUMI_BACKEND_MIGRATE_SECRETS_KEY` | Run migration and exit |
+| `--old-secrets-provider` | `PULUMI_BACKEND_OLD_SECRETS_PROVIDER` | Previous provider: `local` or `gcpkms` |
+| `--old-master-key` | `PULUMI_BACKEND_OLD_MASTER_KEY` | Previous hex-encoded master key |
+| `--old-kms-key` | `PULUMI_BACKEND_OLD_KMS_KEY` | Previous GCP KMS key resource name |
 
 #### Authentication
 
@@ -122,6 +158,7 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 - Prometheus metrics (`/metrics`)
 - OpenAPI 3.1 spec (`GET /api/openapi`)
 - Database backup (`POST /api/admin/backup`)
+- Secrets key migration (`--migrate-secrets-key` for local key rotation and local↔KMS migration)
 
 ## Audit logging
 
@@ -168,7 +205,8 @@ The `tests/reliability_test.go` suite covers state consistency edge cases:
 - Locking & lease edge cases (double start, checkpoint/complete after cancel)
 - Concurrent operations (parallel checkpoints, concurrent read/write, concurrent imports)
 - Stack lifecycle (recreation after deletion, operations during active updates, secrets after rename)
-- Secrets consistency (encrypt/decrypt roundtrip, batch operations, key preservation across rename)
+- Secrets consistency (encrypt/decrypt roundtrip, batch operations, key preservation across rename, key migration)
+- Master key verification (canary persistence across restart, mismatch detection)
 - History consistency (all updates recorded, version/export alignment)
 - Error response format and information leakage (no UUIDs, SQL internals, Go paths in messages)
 - Declared error code coverage (meta-test verifies every `Errors: []int{...}` has a test scenario)
