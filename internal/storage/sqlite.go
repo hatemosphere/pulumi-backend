@@ -10,11 +10,21 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/klauspost/compress/gzip"
 	_ "modernc.org/sqlite"
 )
+
+// Pooled gzip writer and buffer to avoid allocating ~800KB per SaveState.
+var gzipWriterPool = sync.Pool{
+	New: func() any { return gzip.NewWriter(nil) },
+}
+
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
 
 const defaultMaxStateVersions = 50
 
@@ -460,7 +470,7 @@ func (s *SQLiteStore) GetCurrentState(ctx context.Context, org, project, stack s
 	return s.GetStateVersion(ctx, org, project, stack, version)
 }
 
-// maybeGzipReader handles transparent decompression if the data starts with gzip magic bytes.
+// maybeDecompress handles transparent decompression if the data starts with gzip magic bytes.
 func maybeDecompress(data []byte) ([]byte, error) {
 	if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
 		gr, err := gzip.NewReader(bytes.NewReader(data))
@@ -471,14 +481,25 @@ func maybeDecompress(data []byte) ([]byte, error) {
 
 		limit := int64(512 * 1024 * 1024) // 512 MB limit to prevent decompression bombs
 		limitReader := io.LimitReader(gr, limit+1)
-		decompressed, err := io.ReadAll(limitReader)
+
+		buf := bufPool.Get().(*bytes.Buffer)
+		buf.Reset()
+		buf.Grow(len(data) * 4) // estimate ~4x expansion
+
+		_, err = io.Copy(buf, limitReader)
 		if err != nil {
+			bufPool.Put(buf)
 			return nil, err
 		}
-		if int64(len(decompressed)) > limit {
+		if int64(buf.Len()) > limit {
+			bufPool.Put(buf)
 			return nil, errors.New("decompressed deployment exceeds maximum size of 512MB")
 		}
-		return decompressed, nil
+
+		result := make([]byte, buf.Len())
+		copy(result, buf.Bytes())
+		bufPool.Put(buf)
+		return result, nil
 	}
 	return data, nil
 }
@@ -559,16 +580,33 @@ func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 	if len(state.Deployment) > 2 && state.Deployment[0] == 0x1f && state.Deployment[1] == 0x8b {
 		compressedDeployment = state.Deployment
 	} else {
-		// GZIP compress the deployment.
-		var buf bytes.Buffer
-		gw := gzip.NewWriter(&buf)
+		// GZIP compress the deployment using pooled writer.
+		buf := bufPool.Get().(*bytes.Buffer)
+		buf.Reset()
+		buf.Grow(len(state.Deployment) / 4)
+
+		gw := gzipWriterPool.Get().(*gzip.Writer)
+		gw.Reset(buf)
+
 		if _, err := gw.Write(state.Deployment); err != nil {
+			gw.Reset(nil)
+			gzipWriterPool.Put(gw)
+			bufPool.Put(buf)
 			return fmt.Errorf("compress deployment: %w", err)
 		}
 		if err := gw.Close(); err != nil {
+			gw.Reset(nil)
+			gzipWriterPool.Put(gw)
+			bufPool.Put(buf)
 			return fmt.Errorf("close gzip writer: %w", err)
 		}
-		compressedDeployment = buf.Bytes()
+
+		compressedDeployment = make([]byte, buf.Len())
+		copy(compressedDeployment, buf.Bytes())
+
+		gw.Reset(nil)
+		gzipWriterPool.Put(gw)
+		bufPool.Put(buf)
 	}
 
 	_, err = tx.ExecContext(ctx,
@@ -579,8 +617,8 @@ func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 		return err
 	}
 
-	// Count resources in the deployment for the resource_count field.
-	resourceCount := countResources(state.Deployment)
+	// Use pre-computed resource count from engine layer (avoids decompressing).
+	resourceCount := state.ResourceCount
 
 	_, err = tx.ExecContext(ctx,
 		`UPDATE stacks SET current_version=?, resource_count=?, updated_at=? WHERE org_name=? AND project_name=? AND name=? AND current_version<?`,
@@ -607,8 +645,8 @@ func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 	return tx.Commit()
 }
 
-// countResources extracts the resource count from an uncompressed deployment JSON.
-func countResources(deployment []byte) int {
+// CountResources extracts the resource count from uncompressed deployment JSON.
+func CountResources(deployment []byte) int {
 	var doc struct {
 		Deployment struct {
 			Resources []json.RawMessage `json:"resources"`

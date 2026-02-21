@@ -48,6 +48,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | `tests/spec_test.go` | OpenAPI spec compliance vs upstream + CLI error semantics |
 | `tests/reliability_test.go` | State consistency, error format, concurrency, checkpoint modes, journal replay, secrets, error code coverage |
 | `tests/auth_integration_test.go` | Auth + RBAC integration tests |
+| `tests/bench_test.go` | Comprehensive benchmarks (compression, export, lifecycle, secrets, journal, HTTP) |
 
 ## Reference code
 
@@ -65,7 +66,7 @@ go test -timeout 120s ./tests/ -count=1                   # API + auth + reliabi
 go test -v -timeout 600s ./tests/ -count=1                # all tests including CLI (needs pulumi in PATH)
 go test -v -run TestAPISpecSchemaCompliance ./tests/      # spec compliance
 go test -v -run TestReliability ./tests/                  # state consistency / reliability tests
-go test -bench . -benchmem ./internal/engine              # run engine benchmarks (not in CI)
+go test -bench . -benchmem -timeout 120s ./tests/         # benchmarks (engine + HTTP, not in CI)
 go test -timeout 600s ./tests/ -count=1                   # full suite
 golangci-lint run ./...                                   # lint
 ```
@@ -97,6 +98,9 @@ golangci-lint run ./...                                   # lint
 - **Log format**: `-log-format` flag (`json` default, `text` for local dev) + `PULUMI_BACKEND_LOG_FORMAT` env var.
 - **Backup**: `VACUUM INTO` creates consistent point-in-time SQLite snapshots. In WAL mode, uses shared/read lock only — concurrent writes are NOT blocked. Backups uploaded to S3-compatible providers via `backup.Provider` interface. `backup.Scheduler` runs periodic backups (ticker goroutine, same pattern as `eventFlusher`). `backup.Prune` enforces retention policy. Engine's `Backup()` returns `*BackupResult{LocalPath, RemoteKeys}`. Admin API: `POST /api/admin/backup`. AWS credentials via standard SDK chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, IAM role, instance metadata).
 - **Backup tests**: Unit tests use `grafana/s3-mock` (in-process mock S3 server that returns real `*s3.Client` — no interface mocking needed). Integration tests in `reliability_test.go` verify backup during active updates, concurrent checkpoints, and no-destination error.
+- **Profiling**: `--pprof` flag / `PULUMI_BACKEND_PPROF=true` enables `/debug/pprof/` endpoints (no auth, dev only). See `docs/performance.md`.
+- **Compression pooling**: `gzip.Writer` and `bytes.Buffer` are pooled via `sync.Pool` in both `engine/manager.go` and `storage/sqlite.go`. Each `compress/flate.NewWriter` allocates ~800KB — pooling amortizes to near-zero.
+- **Resource count pre-computation**: `storage.CountResources()` runs in the engine layer on uncompressed JSON before compression. Passed to storage via `StackState.ResourceCount` to avoid decompressing in the storage layer.
 - Deployments: gzip-compressed in DB, zero-copy gzip export when client accepts it
 - Leases: in-memory `sync.Map` + SQLite; lost on restart
 - State versions: pruned to last N (default 50) per stack

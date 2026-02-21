@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/pprof"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,7 @@ type Server struct {
 	groupsCache      *auth.GroupsCache      // optional: resolves groups via external API (e.g. Google Admin SDK)
 	jwtAuth          *auth.JWTAuthenticator // required in jwt auth mode
 	rbac             *auth.RBACResolver     // nil = no RBAC enforcement
+	pprofEnabled     bool                   // enable /debug/pprof/ endpoints
 }
 
 // NewServer creates a new API server.
@@ -93,6 +95,11 @@ func WithGroupsCache(gc *auth.GroupsCache) ServerOption {
 // WithRBAC sets the RBAC resolver for permission enforcement.
 func WithRBAC(resolver *auth.RBACResolver) ServerOption {
 	return func(s *Server) { s.rbac = resolver }
+}
+
+// WithPprof enables /debug/pprof/ profiling endpoints.
+func WithPprof() ServerOption {
+	return func(s *Server) { s.pprofEnabled = true }
 }
 
 // humaJSONFormat uses stdlib encoding/json for huma request/response serialization.
@@ -175,6 +182,16 @@ func (s *Server) Router() http.Handler {
 		s.registerUserTokens(api)
 	}
 	s.registerOrg(api)
+
+	// Register pprof debug endpoints (no auth, direct on mux).
+	if s.pprofEnabled {
+		mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+		mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+		slog.Info("pprof profiling endpoints enabled at /debug/pprof/")
+	}
 
 	// HTTP-level middleware (outermost applied last).
 	var handler http.Handler = mux

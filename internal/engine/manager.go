@@ -353,6 +353,9 @@ func (m *Manager) ImportState(ctx context.Context, org, project, stack string, d
 	newVersion := st.Version + 1
 	hash := sha256.Sum256(deployment)
 
+	// Count resources before compressing (avoids decompression in storage layer).
+	resourceCount := storage.CountResources(deployment)
+
 	// Compress before saving to cache and store (so we don't double compress in store).
 	compressed, err := compress(deployment)
 	if err != nil {
@@ -360,12 +363,13 @@ func (m *Manager) ImportState(ctx context.Context, org, project, stack string, d
 	}
 
 	err = m.store.SaveState(ctx, &storage.StackState{
-		OrgName:     org,
-		ProjectName: project,
-		StackName:   stack,
-		Version:     newVersion,
-		Deployment:  compressed, // Send compressed data
-		Hash:        hex.EncodeToString(hash[:]),
+		OrgName:       org,
+		ProjectName:   project,
+		StackName:     stack,
+		Version:       newVersion,
+		Deployment:    compressed,
+		Hash:          hex.EncodeToString(hash[:]),
+		ResourceCount: resourceCount,
 	})
 	if err != nil {
 		return err
@@ -509,31 +513,10 @@ func (m *Manager) CompleteUpdate(ctx context.Context, updateID string, status st
 	}
 
 	// If journaling was used, replay journal to reconstruct final state.
+	// replayAndSaveJournal handles both SaveState and cache update.
 	if u.JournalVersion > 0 && status == "succeeded" {
-		resultJSON, err := m.replayAndSaveJournal(ctx, u)
-		if err != nil {
+		if _, err := m.replayAndSaveJournal(ctx, u); err != nil {
 			return fmt.Errorf("journal replay: %w", err)
-		}
-
-		// Only save state if journal replay produced data (e.g. preview has no journal entries).
-		if resultJSON != nil {
-			compressed, err := compress(resultJSON)
-			if err == nil {
-				m.cache.Add(stackKey(u.OrgName, u.ProjectName, u.StackName), compressed)
-			}
-
-			hash := sha256.Sum256(resultJSON)
-			err = m.store.SaveState(ctx, &storage.StackState{
-				OrgName:     u.OrgName,
-				ProjectName: u.ProjectName,
-				StackName:   u.StackName,
-				Version:     u.Version,
-				Deployment:  compressed,
-				Hash:        hex.EncodeToString(hash[:]),
-			})
-			if err != nil {
-				return err
-			}
 		}
 	}
 
@@ -651,6 +634,9 @@ func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deploymen
 		return err
 	}
 
+	// Count resources on uncompressed data before compressing.
+	resourceCount := storage.CountResources(deployment)
+
 	// Compress before saving.
 	compressed, err := compress(deployment)
 	if err != nil {
@@ -659,12 +645,13 @@ func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deploymen
 
 	hash := sha256.Sum256(deployment)
 	err = m.store.SaveState(ctx, &storage.StackState{
-		OrgName:     u.OrgName,
-		ProjectName: u.ProjectName,
-		StackName:   u.StackName,
-		Version:     u.Version,
-		Deployment:  compressed, // Send compressed data
-		Hash:        hex.EncodeToString(hash[:]),
+		OrgName:       u.OrgName,
+		ProjectName:   u.ProjectName,
+		StackName:     u.StackName,
+		Version:       u.Version,
+		Deployment:    compressed,
+		Hash:          hex.EncodeToString(hash[:]),
+		ResourceCount: resourceCount,
 	})
 	if err != nil {
 		return err
@@ -674,27 +661,50 @@ func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deploymen
 	return nil
 }
 
-// Helpers for compression
+// Pooled gzip writer and buffer to avoid allocating ~800KB per compress() call.
+var gzipWriterPool = sync.Pool{
+	New: func() any { return gzip.NewWriter(nil) },
+}
+
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+// compress gzip-compresses data using pooled writers and buffers.
 func compress(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	buf.Grow(len(data) / 4) // compressed output is typically 3-5x smaller
+
+	gw := gzipWriterPool.Get().(*gzip.Writer)
+	gw.Reset(buf)
+
 	if _, err := gw.Write(data); err != nil {
+		gw.Reset(nil)
+		gzipWriterPool.Put(gw)
+		bufPool.Put(buf)
 		return nil, err
 	}
 	if err := gw.Close(); err != nil {
+		gw.Reset(nil)
+		gzipWriterPool.Put(gw)
+		bufPool.Put(buf)
 		return nil, err
 	}
-	return buf.Bytes(), nil
+
+	// Copy result out before returning buffer to pool.
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+
+	gw.Reset(nil)
+	gzipWriterPool.Put(gw)
+	bufPool.Put(buf)
+	return result, nil
 }
 
 func maybeDecompress(data []byte) ([]byte, error) {
 	if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
-		gr, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, err
-		}
-		defer gr.Close()
-		return io.ReadAll(gr)
+		return decompress(data)
 	}
 	return data, nil
 }
@@ -705,7 +715,22 @@ func decompress(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer gr.Close()
-	return io.ReadAll(gr)
+
+	// Pre-allocate output buffer: assume ~4x expansion ratio.
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	buf.Grow(len(data) * 4)
+
+	_, err = io.Copy(buf, gr)
+	if err != nil {
+		bufPool.Put(buf)
+		return nil, err
+	}
+
+	result := make([]byte, buf.Len())
+	copy(result, buf.Bytes())
+	bufPool.Put(buf)
+	return result, nil
 }
 
 // SaveCheckpointDelta applies a text diff to the previous state to produce the new state.

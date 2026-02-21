@@ -2,8 +2,8 @@
 # Use the official Golang alpine image for a minimal build environment
 FROM golang:1.26.0-alpine AS builder
 
-# Install build dependencies: git for fetching Go modules; gcc/musl-dev for CGO (SQLite requires CGO)
-RUN apk add --no-cache git build-base
+# Install git for fetching Go modules
+RUN apk add --no-cache git
 
 # Set the working directory inside the container
 WORKDIR /app
@@ -16,9 +16,8 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 
-# Build the Go application
-# CGO_ENABLED=1 is required for the modernc.org/sqlite driver (or standard go-sqlite3)
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o /pulumi-backend ./cmd/pulumi-backend/main.go
+# Build the Go application (CGO disabled — modernc.org/sqlite is pure Go)
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /pulumi-backend ./cmd/pulumi-backend/main.go
 
 # Runtime Stage
 # Use a minimal Alpine Linux image for the runtime

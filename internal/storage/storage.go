@@ -19,13 +19,14 @@ type Stack struct {
 
 // StackState holds a versioned deployment snapshot for a stack.
 type StackState struct {
-	OrgName     string
-	ProjectName string
-	StackName   string
-	Version     int
-	Deployment  []byte // gzip-compressed JSON
-	Hash        string // SHA-256 of uncompressed deployment JSON
-	CreatedAt   time.Time
+	OrgName       string
+	ProjectName   string
+	StackName     string
+	Version       int
+	Deployment    []byte // gzip-compressed JSON
+	Hash          string // SHA-256 of uncompressed deployment JSON
+	ResourceCount int    // pre-computed resource count (avoids decompressing in storage layer)
+	CreatedAt     time.Time
 }
 
 // Update represents an in-progress or completed update session.

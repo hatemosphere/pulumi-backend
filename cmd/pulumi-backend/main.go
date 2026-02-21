@@ -145,6 +145,9 @@ func main() {
 		api.WithHistoryPageSize(cfg.HistoryPageSize),
 		api.WithAuthMode(cfg.AuthMode),
 	}
+	if cfg.PprofEnabled {
+		serverOpts = append(serverOpts, api.WithPprof())
+	}
 
 	switch cfg.AuthMode {
 	case "google":

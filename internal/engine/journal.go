@@ -110,21 +110,30 @@ func (m *Manager) replayAndSaveJournal(ctx context.Context, u *storage.Update) (
 		return nil, fmt.Errorf("marshal result: %w", err)
 	}
 
+	resourceCount := storage.CountResources(resultJSON)
+
+	// Compress before saving to cache and store.
+	compressed, err := compress(resultJSON)
+	if err != nil {
+		return nil, fmt.Errorf("compress journal result: %w", err)
+	}
+
 	hash := sha256.Sum256(resultJSON)
 	err = m.store.SaveState(ctx, &storage.StackState{
-		OrgName:     u.OrgName,
-		ProjectName: u.ProjectName,
-		StackName:   u.StackName,
-		Version:     u.Version,
-		Deployment:  resultJSON,
-		Hash:        hex.EncodeToString(hash[:]),
+		OrgName:       u.OrgName,
+		ProjectName:   u.ProjectName,
+		StackName:     u.StackName,
+		Version:       u.Version,
+		Deployment:    compressed,
+		Hash:          hex.EncodeToString(hash[:]),
+		ResourceCount: resourceCount,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Update the cache so ExportState returns fresh state.
-	m.cache.Add(stackKey(u.OrgName, u.ProjectName, u.StackName), resultJSON)
+	// Update the cache so ExportState returns fresh compressed state.
+	m.cache.Add(stackKey(u.OrgName, u.ProjectName, u.StackName), compressed)
 	return resultJSON, nil
 }
 

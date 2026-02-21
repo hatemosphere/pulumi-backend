@@ -85,6 +85,9 @@ type Config struct {
 	LogFormat string // "json" (default) or "text"
 	AuditLogs bool   // enable audit logging (default true)
 
+	// Profiling.
+	PprofEnabled bool // enable pprof endpoints at /debug/pprof/
+
 	// Secrets key migration (re-wrap DEKs from old to new provider, then exit).
 	MigrateSecretsKey  bool   // --migrate-secrets-key
 	OldSecretsProvider string // --old-secrets-provider (local or gcpkms)
@@ -163,6 +166,9 @@ func Parse() *Config {
 	// Logging flags.
 	fs.StringVar(&c.LogFormat, "log-format", "json", "log format: json or text")
 	fs.BoolVar(&c.AuditLogs, "audit-logs", true, "enable structured audit logging")
+
+	// Profiling flags.
+	fs.BoolVar(&c.PprofEnabled, "pprof", false, "enable pprof profiling endpoints at /debug/pprof/")
 
 	// Secrets key migration flags.
 	fs.BoolVar(&c.MigrateSecretsKey, "migrate-secrets-key", false, "re-wrap all DEKs from old to new provider, then exit")

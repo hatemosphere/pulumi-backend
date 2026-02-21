@@ -59,6 +59,7 @@ All flags have corresponding environment variables with the `PULUMI_BACKEND_` pr
 | `-key` | `PULUMI_BACKEND_KEY` | | TLS key file |
 | `-log-format` | `PULUMI_BACKEND_LOG_FORMAT` | `json` | Log format: `json` or `text` |
 | `-audit-logs` | `PULUMI_BACKEND_AUDIT_LOGS` | `true` | Enable structured audit logging |
+| `-pprof` | `PULUMI_BACKEND_PPROF` | `false` | Enable pprof profiling endpoints at `/debug/pprof/` |
 
 If no master key is provided, one is auto-generated and printed to stderr. **You must persist it** (e.g. `export PULUMI_BACKEND_MASTER_KEY=...`) — secrets will be undecryptable on restart with a different key.
 
@@ -150,6 +151,7 @@ Four auth modes: `single-tenant` (default), `google`, `oidc`, and `jwt`.
 - **[Generic OIDC setup guide](docs/auth-oidc.md)** — Okta, Entra ID, Keycloak, any OIDC provider
 - **[JWT setup guide](docs/auth-jwt.md)** — HMAC/RSA/ECDSA, Dex, Keycloak integration
 - **[RBAC configuration](docs/rbac.md)** — Group roles, stack policies, permission levels
+- **[Performance testing](docs/performance.md)** — Benchmarks, pprof profiling, optimization guide
 
 ## API compatibility
 
@@ -205,7 +207,7 @@ go test -v ./tests/ -run TestAPISpecSchemaCompliance       # OpenAPI spec compli
 go test -v ./tests/ -run TestCLIErrorSemantics             # CLI error message compatibility
 go test -v ./tests/ -run TestDeclaredErrorCodes            # error code coverage + exercised
 go test -v ./tests/ -run TestReliability                   # state consistency / reliability tests
-go test -bench . -benchmem ./internal/engine               # engine benchmarks
+go test -bench . -benchmem -timeout 120s ./tests/          # benchmarks (engine + HTTP)
 go test -timeout 600s ./tests/ -count=1                    # full suite (with pulumi in PATH)
 ```
 
