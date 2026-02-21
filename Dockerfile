@@ -1,6 +1,6 @@
 # Build Stage
 # Use the official Golang alpine image for a minimal build environment
-FROM golang:1.25.6-alpine AS builder
+FROM golang:1.26.0-alpine AS builder
 
 # Install build dependencies: git for fetching Go modules; gcc/musl-dev for CGO (SQLite requires CGO)
 RUN apk add --no-cache git build-base
