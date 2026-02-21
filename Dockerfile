@@ -22,7 +22,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o /pulumi-backend ./cmd/
 
 # Runtime Stage
 # Use a minimal Alpine Linux image for the runtime
-FROM alpine:3.21
+FROM alpine:3.23
 
 # Add CA certificates for HTTPS/OIDC communication
 # Add tzdata for time-based features (e.g. JWT expirations/Tokens)
