@@ -54,6 +54,8 @@ func (s *Server) registerUser(api huma.API) {
 			return nil, internalError(err)
 		}
 
+		stacks = s.filterStacksByRBAC(ctx, stacks)
+
 		out := &ListUserStacksOutput{}
 		out.Body.Stacks = stacksToSummaries(stacks, true)
 		if nextToken != "" {
@@ -86,6 +88,8 @@ func (s *Server) registerUser(api huma.API) {
 			return nil, internalError(err)
 		}
 
+		stacks = s.filterStacksByRBAC(ctx, stacks)
+
 		out := &ListOrgStacksOutput{}
 		out.Body.Stacks = stacksToSummaries(stacks, false)
 		if nextToken != "" {
@@ -93,6 +97,22 @@ func (s *Server) registerUser(api huma.API) {
 		}
 		return out, nil
 	})
+}
+
+// filterStacksByRBAC removes stacks the user does not have at least read
+// access to. If RBAC is not configured (single-tenant mode), all stacks pass.
+func (s *Server) filterStacksByRBAC(ctx context.Context, stacks []storage.Stack) []storage.Stack {
+	if s.rbac == nil {
+		return stacks
+	}
+	identity := auth.IdentityFromContext(ctx)
+	filtered := make([]storage.Stack, 0, len(stacks))
+	for _, st := range stacks {
+		if s.rbac.Resolve(identity, st.OrgName, st.ProjectName, st.StackName) >= auth.PermissionRead {
+			filtered = append(filtered, st)
+		}
+	}
+	return filtered
 }
 
 // stacksToSummaries converts storage stacks to API StackSummary values.

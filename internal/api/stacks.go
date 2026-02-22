@@ -80,6 +80,9 @@ func (s *Server) registerStacks(api huma.API) {
 		if input.Body.StackName == "" {
 			return nil, huma.NewError(http.StatusBadRequest, "stackName is required")
 		}
+		if err := validateName(input.OrgName, "organization"); err != nil {
+			return nil, huma.NewError(http.StatusBadRequest, err.Error())
+		}
 		if err := validateName(input.Body.StackName, "stack"); err != nil {
 			return nil, huma.NewError(http.StatusBadRequest, err.Error())
 		}
@@ -263,7 +266,15 @@ func (s *Server) registerStacks(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/config",
 		Tags:        []string{"Stacks"},
+		Errors:      []int{404},
 	}, func(ctx context.Context, input *GetStackConfigInput) (*GetStackConfigOutput, error) {
+		st, err := s.engine.GetStack(ctx, input.OrgName, input.ProjectName, input.StackName)
+		if err != nil {
+			return nil, internalError(err)
+		}
+		if st == nil {
+			return nil, huma.NewError(http.StatusNotFound, "stack not found")
+		}
 		return &GetStackConfigOutput{}, nil
 	})
 

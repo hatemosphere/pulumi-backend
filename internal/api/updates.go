@@ -29,7 +29,8 @@ func isConflictError(err error) bool {
 }
 
 // sanitizeError returns a client-safe error message.
-// Sentinel errors pass through. Internal errors are scrubbed of UUIDs and SQL details.
+// Sentinel errors pass through. Internal errors are scrubbed of UUIDs, SQL details,
+// file paths, and OS-level messages.
 func sanitizeError(err error) string {
 	if isConflictError(err) {
 		return err.Error()
@@ -38,12 +39,23 @@ func sanitizeError(err error) string {
 	for _, indicator := range []string{
 		"UNIQUE constraint", "no such table", "database is locked",
 		"SQLITE_", "sql:", "constraint failed",
+		"permission denied", "no such file",
 	} {
 		if strings.Contains(msg, indicator) {
 			return "internal error"
 		}
 	}
+	// Catch file paths (common prefixes).
+	for _, prefix := range []string{"/opt/", "/home/", "/tmp/", "/var/", "/etc/", "/usr/"} {
+		if strings.Contains(msg, prefix) {
+			return "internal error"
+		}
+	}
 	if uuidPattern.MatchString(msg) {
+		return "internal error"
+	}
+	// Catch-all: overly long messages likely contain internal details.
+	if len(msg) > 200 {
 		return "internal error"
 	}
 	return msg
@@ -53,11 +65,12 @@ func (s *Server) registerUpdates(api huma.API) {
 	// --- Create update (4 kinds) ---
 	for _, kind := range []string{"preview", "update", "refresh", "destroy"} {
 		huma.Register(api, huma.Operation{
-			OperationID: "create" + ucfirst(kind),
-			Method:      http.MethodPost,
-			Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/" + kind,
-			Tags:        []string{"Updates"},
-			Errors:      []int{409},
+			OperationID:  "create" + ucfirst(kind),
+			Method:       http.MethodPost,
+			Path:         "/api/stacks/{orgName}/{projectName}/{stackName}/" + kind,
+			Tags:         []string{"Updates"},
+			MaxBodyBytes: 1 << 20, // 1MB
+			Errors:       []int{409},
 		}, func(ctx context.Context, input *CreateUpdateInput) (*CreateUpdateOutput, error) {
 			// Extract config/metadata from raw body to preserve all fields
 			// (the typed Body is used only for OpenAPI schema generation).
@@ -131,6 +144,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		Method:        http.MethodPost,
 		Path:          "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/complete",
 		Tags:          []string{"Updates"},
+		MaxBodyBytes:  1 << 20, // 1MB
 		DefaultStatus: 200,
 		Errors:        []int{409},
 	}, func(ctx context.Context, input *CompleteUpdateInput) (*struct{}, error) {
@@ -304,7 +318,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/events",
 		Tags:        []string{"Events"},
-		Errors:      []int{404},
+		Errors:      []int{400, 404},
 	}, func(ctx context.Context, input *GetEventsInput) (*GetEventsOutput, error) {
 		u, err := s.engine.GetUpdate(ctx, input.UpdateID)
 		if err != nil {
@@ -316,7 +330,11 @@ func (s *Server) registerUpdates(api huma.API) {
 
 		var offset int
 		if input.ContinuationToken != "" {
-			offset, _ = strconv.Atoi(input.ContinuationToken)
+			var err error
+			offset, err = strconv.Atoi(input.ContinuationToken)
+			if err != nil || offset < 0 {
+				return nil, huma.NewError(http.StatusBadRequest, "invalid continuation token")
+			}
 		}
 
 		events, err := s.engine.GetEngineEvents(ctx, input.UpdateID, offset, 100)

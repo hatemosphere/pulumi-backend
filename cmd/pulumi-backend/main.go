@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -77,7 +78,13 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Replace canary with new provider.
+		// Verify the new provider works before clearing the old canary.
+		// This ensures we don't lose the canary if the new provider is misconfigured.
+		if err := verifyNewProvider(secretsProvider); err != nil {
+			fmt.Fprintf(os.Stderr, "new secrets provider verification failed: %v\n", err)
+			os.Exit(1)
+		}
+		// Now safe to replace the canary: clear old, then store new.
 		if err := store.SetConfig(context.Background(), "secrets_canary", ""); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to clear old canary: %v\n", err)
 			os.Exit(1)
@@ -145,8 +152,21 @@ func main() {
 		api.WithHistoryPageSize(cfg.HistoryPageSize),
 		api.WithAuthMode(cfg.AuthMode),
 	}
+	if cfg.PublicURL != "" {
+		serverOpts = append(serverOpts, api.WithPublicURL(cfg.PublicURL))
+		slog.Info("public URL configured", "url", cfg.PublicURL)
+	}
 	if cfg.PprofEnabled {
 		serverOpts = append(serverOpts, api.WithPprof())
+	}
+	if cfg.TrustedProxies != "" {
+		proxies, err := api.ParseTrustedProxies(cfg.TrustedProxies)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid trusted-proxies: %v\n", err)
+			os.Exit(1)
+		}
+		serverOpts = append(serverOpts, api.WithTrustedProxies(proxies))
+		slog.Info("trusted proxies configured", "cidrs", cfg.TrustedProxies)
 	}
 
 	switch cfg.AuthMode {
@@ -278,7 +298,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "failed to load RBAC config: %v\n", err)
 			os.Exit(1)
 		}
-		serverOpts = append(serverOpts, api.WithRBAC(auth.NewRBACResolver(rbacCfg)))
+		rbacResolver, err := auth.NewRBACResolver(rbacCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid RBAC config: %v\n", err)
+			os.Exit(1)
+		}
+		serverOpts = append(serverOpts, api.WithRBAC(rbacResolver))
 		slog.Info("RBAC enabled", "config", cfg.RBACConfigPath)
 	}
 
@@ -400,10 +425,28 @@ func verifySecretsProvider(store *storage.SQLiteStore, provider engine.SecretsPr
 	if err != nil {
 		return fmt.Errorf("wrong secrets key: cannot decrypt verification canary (%s provider, did the key change?)", provider.ProviderName())
 	}
-	if string(plaintext) != canaryPlaintext {
+	if subtle.ConstantTimeCompare(plaintext, []byte(canaryPlaintext)) != 1 {
 		return errors.New("secrets canary mismatch: decrypted value does not match expected canary")
 	}
 
+	return nil
+}
+
+// verifyNewProvider checks that a secrets provider can round-trip encrypt/decrypt.
+// Called during key migration to verify the new provider before clearing the old canary.
+func verifyNewProvider(provider engine.SecretsProvider) error {
+	ctx := context.Background()
+	ciphertext, err := provider.WrapKey(ctx, []byte(canaryPlaintext))
+	if err != nil {
+		return fmt.Errorf("encrypt test: %w", err)
+	}
+	plaintext, err := provider.UnwrapKey(ctx, ciphertext)
+	if err != nil {
+		return fmt.Errorf("decrypt test: %w", err)
+	}
+	if string(plaintext) != canaryPlaintext {
+		return errors.New("round-trip mismatch: decrypted value does not match original")
+	}
 	return nil
 }
 

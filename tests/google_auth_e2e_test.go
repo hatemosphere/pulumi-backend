@@ -92,8 +92,11 @@ func TestGoogleAuthE2E(t *testing.T) {
 	if writeGroup != "" {
 		groupRoles = append(groupRoles, auth.GroupRole{Group: writeGroup, Permission: "write"})
 	}
-	rbacConfig := &auth.RBACConfig{GroupRoles: groupRoles}
-	rbacResolver := auth.NewRBACResolver(rbacConfig)
+	rbacConfig := &auth.RBACConfig{DefaultPermission: "read", GroupRoles: groupRoles}
+	rbacResolver, err := auth.NewRBACResolver(rbacConfig)
+	if err != nil {
+		t.Fatalf("NewRBACResolver: %v", err)
+	}
 
 	// --- Build backend server ---
 	dataDir := t.TempDir()

@@ -49,7 +49,7 @@ func (s *Server) registerOrg(api huma.API) {
 		Path:        "/api/orgs/{orgName}/roles",
 		Tags:        []string{"Roles"},
 		Errors:      []int{400},
-	}, func(ctx context.Context, input *OrgNameInput) (*ListRolesOutput, error) {
+	}, func(ctx context.Context, input *ListRolesInput) (*ListRolesOutput, error) {
 		out := &ListRolesOutput{}
 		out.Body.Roles = s.buildRoles()
 		return out, nil
@@ -78,8 +78,28 @@ func (s *Server) buildTeams(ctx context.Context) []TeamInfo {
 		groupSet[sp.Group] = true
 	}
 
+	// Build set of groups the calling user belongs to.
+	isAdmin := identity != nil && identity.IsAdmin
+	if !isAdmin && s.rbac != nil && identity != nil {
+		// Also check if user has RBAC admin permission.
+		isAdmin = s.rbac.Resolve(identity, "", "", "") >= auth.PermissionAdmin
+	}
+	userGroups := make(map[string]struct{})
+	if identity != nil {
+		for _, g := range identity.Groups {
+			userGroups[g] = struct{}{}
+		}
+	}
+
 	teams := make([]TeamInfo, 0, len(groupSet))
 	for group := range groupSet {
+		// Non-admin users only see teams they belong to.
+		if !isAdmin {
+			if _, ok := userGroups[group]; !ok {
+				continue
+			}
+		}
+
 		team := TeamInfo{
 			Kind:        "pulumi",
 			Name:        group,
@@ -90,15 +110,12 @@ func (s *Server) buildTeams(ctx context.Context) []TeamInfo {
 
 		// If the requesting user is in this group, show them as a member.
 		if identity != nil {
-			for _, g := range identity.Groups {
-				if g == group {
-					team.Members = append(team.Members, TeamMemberInfo{
-						Name:        identity.UserName,
-						GithubLogin: identity.UserName,
-						Role:        "member",
-					})
-					break
-				}
+			if _, ok := userGroups[group]; ok {
+				team.Members = append(team.Members, TeamMemberInfo{
+					Name:        identity.UserName,
+					GithubLogin: identity.UserName,
+					Role:        "member",
+				})
 			}
 		}
 

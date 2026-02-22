@@ -1039,8 +1039,10 @@ func TestDeclaredErrorCodesExercised(t *testing.T) {
 	rCreateStack(t, tb, "errtest", "dev")
 	rCreateStack(t, tb, "errtest", "rename-target")
 
-	// Run one successful update so we have history.
-	rRunFullUpdate(t, tb, "errtest", "dev", rMakeDeployment("v1"))
+	// Run one successful update so we have history, capturing updateID for event tests.
+	errtestUpdateID, _ := rCreateAndStartUpdate(t, tb, "errtest", "dev", 0)
+	rPostCheckpoint(t, tb, "errtest", "dev", errtestUpdateID, rMakeDeployment("v1"))
+	rCompleteUpdate(t, tb, "errtest", "dev", errtestUpdateID, "succeeded")
 
 	scenarios := []struct {
 		name       string
@@ -1130,6 +1132,12 @@ func TestDeclaredErrorCodesExercised(t *testing.T) {
 			body:       nil,
 			wantStatus: 400,
 		},
+		{
+			name:       "getStackConfig/404",
+			method:     "GET",
+			path:       fmt.Sprintf("/api/stacks/%s/errtest/nonexistent/config", rOrg),
+			wantStatus: 404,
+		},
 		// --- updates.go ---
 		{
 			name:       "getUpdateStatus/404",
@@ -1142,6 +1150,12 @@ func TestDeclaredErrorCodesExercised(t *testing.T) {
 			method:     "GET",
 			path:       fmt.Sprintf("/api/stacks/%s/errtest/dev/update/nonexistent-id/events", rOrg),
 			wantStatus: 404,
+		},
+		{
+			name:       "getEvents/400/invalidContinuationToken",
+			method:     "GET",
+			path:       fmt.Sprintf("/api/stacks/%s/errtest/dev/update/%s/events?continuationToken=not-a-number", rOrg, errtestUpdateID),
+			wantStatus: 400,
 		},
 		{
 			name:       "getUpdates/400/negativePage",
@@ -1212,7 +1226,8 @@ func TestDeclaredErrorCodesCoverage(t *testing.T) {
 		"exportStack":        {404: true},
 		"exportStackVersion": {400: true, 404: true}, // 400: huma validates int path param
 		"importStack":        {400: true, 409: true}, // 409: TestReliability_ErrorResponseFormat
-		"updateStackConfig":  {400: true},            // no-op stub, 400 declared for spec compat
+		"getStackConfig":     {404: true},
+		"updateStackConfig":  {400: true}, // no-op stub, 400 declared for spec compat
 
 		// updates.go
 		"createUpdate":            {409: true}, // TestReliability_DuplicateUpdateErrorNoLeak
@@ -1227,7 +1242,7 @@ func TestDeclaredErrorCodesCoverage(t *testing.T) {
 		"patchCheckpointVerbatim": {409: true}, // TestReliability_StateGuard409Messages
 		"patchCheckpointDelta":    {409: true}, // TestReliability_StateGuard409Messages
 		"saveJournalEntries":      {400: true}, // huma validates JSON body
-		"getEvents":               {404: true},
+		"getEvents":               {400: true, 404: true},
 		"getUpdates":              {400: true},
 		"getLatestUpdate":         {404: true},
 		"getUpdateByVersion":      {404: true},

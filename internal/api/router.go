@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	stdjson "encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/pprof"
@@ -37,6 +40,9 @@ type Server struct {
 	jwtAuth          *auth.JWTAuthenticator // required in jwt auth mode
 	rbac             *auth.RBACResolver     // nil = no RBAC enforcement
 	pprofEnabled     bool                   // enable /debug/pprof/ endpoints
+	publicURL        string                 // public base URL for redirect URIs (mitigates Host header poisoning)
+	cliSessionNonces *nonceStore            // server-side CLI session nonce store
+	trustedProxies   []*net.IPNet           // CIDRs allowed to set forwarded headers (nil = trust all)
 }
 
 // NewServer creates a new API server.
@@ -47,6 +53,7 @@ func NewServer(engine *engine.Manager, defaultOrg, defaultUser string, opts ...S
 		defaultUser:      defaultUser,
 		deltaCutoffBytes: 1024 * 1024, // 1MB default
 		historyPageSize:  10,
+		cliSessionNonces: newNonceStore(5 * time.Minute),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -100,6 +107,45 @@ func WithRBAC(resolver *auth.RBACResolver) ServerOption {
 // WithPprof enables /debug/pprof/ profiling endpoints.
 func WithPprof() ServerOption {
 	return func(s *Server) { s.pprofEnabled = true }
+}
+
+// WithPublicURL sets the public base URL for redirect URI construction.
+func WithPublicURL(url string) ServerOption {
+	return func(s *Server) { s.publicURL = strings.TrimRight(url, "/") }
+}
+
+// WithTrustedProxies sets the CIDR ranges of trusted reverse proxies.
+// Only requests from these ranges will have X-Forwarded-For/X-Real-Ip honoured.
+func WithTrustedProxies(cidrs []*net.IPNet) ServerOption {
+	return func(s *Server) { s.trustedProxies = cidrs }
+}
+
+// ParseTrustedProxies parses a comma-separated string of CIDRs into []*net.IPNet.
+func ParseTrustedProxies(raw string) ([]*net.IPNet, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var nets []*net.IPNet
+	for _, cidr := range strings.Split(raw, ",") {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		// If no mask specified, add /32 or /128.
+		if !strings.Contains(cidr, "/") {
+			if strings.Contains(cidr, ":") {
+				cidr += "/128"
+			} else {
+				cidr += "/32"
+			}
+		}
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return nil, errors.New("invalid trusted proxy CIDR: " + cidr)
+		}
+		nets = append(nets, ipNet)
+	}
+	return nets, nil
 }
 
 // humaJSONFormat uses stdlib encoding/json for huma request/response serialization.
@@ -196,9 +242,10 @@ func (s *Server) Router() http.Handler {
 	// HTTP-level middleware (outermost applied last).
 	var handler http.Handler = mux
 	handler = gzipDecompressor(handler)
+	handler = securityHeaders(handler)
 	handler = requestLogger(handler)
 	handler = recoverer(handler)
-	handler = realIP(handler)
+	handler = realIP(handler, s.trustedProxies)
 	return handler
 }
 
@@ -297,11 +344,23 @@ func (s *Server) authHumaMiddleware(api huma.API) func(ctx huma.Context, next fu
 	}
 }
 
-// handleUpdateTokenHuma checks for "update-token" auth headers and passes
-// through with a minimal identity. Returns true if handled.
-func handleUpdateTokenHuma(ctx huma.Context, next func(huma.Context), authHeader string) bool {
+// handleUpdateTokenHuma checks for "update-token" auth headers, validates the
+// token against the engine's active update, and passes through with a minimal
+// identity. Returns true if the header was an update-token (handled or rejected).
+func (s *Server) handleUpdateTokenHuma(api huma.API, ctx huma.Context, next func(huma.Context), authHeader string) bool {
 	if !strings.HasPrefix(authHeader, "update-token ") {
 		return false
+	}
+	tokenValue := strings.TrimPrefix(authHeader, "update-token ")
+	updateID := ctx.Param("updateID")
+	if updateID == "" {
+		_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "update-token requires an update-scoped endpoint")
+		return true
+	}
+	if err := s.engine.ValidateUpdateToken(ctx.Context(), updateID, tokenValue); err != nil {
+		slog.Debug("update-token validation failed", "updateID", updateID, "error", err)
+		_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "invalid or expired update token")
+		return true
 	}
 	identity := &auth.UserIdentity{
 		UserName: "update-agent",
@@ -313,7 +372,7 @@ func handleUpdateTokenHuma(ctx huma.Context, next func(huma.Context), authHeader
 // authJWTHuma handles JWT auth mode: stateless token validation with identity
 // and groups extracted directly from JWT claims.
 func (s *Server) authJWTHuma(api huma.API, ctx huma.Context, next func(huma.Context), authHeader string) {
-	if handleUpdateTokenHuma(ctx, next, authHeader) {
+	if s.handleUpdateTokenHuma(api, ctx, next, authHeader) {
 		return
 	}
 
@@ -333,7 +392,7 @@ func (s *Server) authJWTHuma(api huma.API, ctx huma.Context, next func(huma.Cont
 // backend-issued tokens looked up in the database, with optional group
 // resolution via the groups cache or stored token groups.
 func (s *Server) authOIDCHuma(api huma.API, ctx huma.Context, next func(huma.Context), authHeader string) {
-	if handleUpdateTokenHuma(ctx, next, authHeader) {
+	if s.handleUpdateTokenHuma(api, ctx, next, authHeader) {
 		return
 	}
 
@@ -560,8 +619,13 @@ func requestLogger(next http.Handler) http.Handler {
 }
 
 // realIP extracts the real client IP from X-Real-Ip or X-Forwarded-For headers.
-func realIP(next http.Handler) http.Handler {
+// When trustedProxies is non-nil, forwarded headers are only accepted from those CIDRs.
+func realIP(next http.Handler, trustedProxies []*net.IPNet) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if trustedProxies != nil && !isIPTrusted(r.RemoteAddr, trustedProxies) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if rip := r.Header.Get("X-Real-Ip"); rip != "" {
 			r.RemoteAddr = rip
 		} else if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
@@ -573,6 +637,24 @@ func realIP(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isIPTrusted checks whether the remote address falls within any trusted CIDR.
+func isIPTrusted(remoteAddr string, trusted []*net.IPNet) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range trusted {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // recoverer recovers from panics and returns a 500 Internal Server Error.
@@ -588,7 +670,21 @@ func recoverer(next http.Handler) http.Handler {
 	})
 }
 
+// securityHeaders sets standard HTTP security headers on every response.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// maxDecompressedBody is the maximum allowed size for a decompressed gzip request body (256 MB).
+const maxDecompressedBody = 256 << 20
+
 // gzipDecompressor transparently decompresses gzip request bodies.
+// It limits decompressed size to maxDecompressedBody to prevent decompression bombs.
 func gzipDecompressor(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Content-Encoding") == "gzip" {
@@ -602,7 +698,28 @@ func gzipDecompressor(next http.Handler) http.Handler {
 				})
 				return
 			}
-			r.Body = io.NopCloser(gz)
+			limitReader := &io.LimitedReader{R: gz, N: maxDecompressedBody + 1}
+			var buf bytes.Buffer
+			if _, err := io.Copy(&buf, limitReader); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_ = stdjson.NewEncoder(w).Encode(map[string]any{
+					"code":    http.StatusBadRequest,
+					"message": "invalid gzip body",
+				})
+				return
+			}
+			if limitReader.N <= 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_ = stdjson.NewEncoder(w).Encode(map[string]any{
+					"code":    http.StatusRequestEntityTooLarge,
+					"message": "decompressed body exceeds size limit",
+				})
+				return
+			}
+			r.Body = io.NopCloser(&buf)
+			r.ContentLength = int64(buf.Len())
 			r.Header.Del("Content-Encoding")
 		}
 		next.ServeHTTP(w, r)

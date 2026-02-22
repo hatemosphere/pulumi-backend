@@ -18,7 +18,7 @@ func (s *Server) registerUserTokens(api huma.API) {
 		Method:      http.MethodGet,
 		Path:        "/api/user/tokens",
 		Tags:        []string{"User"},
-	}, func(ctx context.Context, input *struct{}) (*ListPersonalTokensOutput, error) {
+	}, func(ctx context.Context, input *ListPersonalTokensInput) (*ListPersonalTokensOutput, error) {
 		identity, err := requireIdentity(ctx)
 		if err != nil {
 			return nil, err

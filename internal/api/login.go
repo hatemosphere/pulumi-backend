@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -39,11 +40,10 @@ func (s *Server) registerLogin(api huma.API) {
 				}
 
 				state := "csrf:" + csrfToken
-				setOAuthStateCookieHuma(ctx, csrfToken)
 
-				scheme := schemeFromCtx(ctx)
-				redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, ctx.Host())
-				authURL := s.oidcAuth.AuthCodeURL(redirectURI, state)
+				redirectURI := s.loginRedirectURI(ctx)
+				authURL, oidcNonce := s.oidcAuth.AuthCodeURL(redirectURI, state)
+				s.setOAuthStateCookieHuma(ctx, csrfToken, oidcNonce)
 
 				ctx.SetHeader("Content-Type", "text/html; charset=utf-8")
 				if err := loginPageTmpl.Execute(ctx.BodyWriter(), map[string]string{
@@ -85,18 +85,28 @@ func (s *Server) registerLogin(api huma.API) {
 					return
 				}
 
+				// Fix 3: Validate CLI port is a valid integer in range 1-65535.
+				port, err := strconv.Atoi(input.SessionPort)
+				if err != nil || port < 1 || port > 65535 {
+					ctx.SetHeader("Content-Type", "text/html; charset=utf-8")
+					renderErrorToWriter(ctx.BodyWriter(), "Invalid cliSessionPort value.")
+					return
+				}
+
 				csrfToken := generateCSRFToken()
 				if csrfToken == "" {
 					ctx.SetStatus(http.StatusInternalServerError)
 					return
 				}
 
-				state := fmt.Sprintf("cli:%s:%s:%s", input.SessionPort, input.SessionNonce, csrfToken)
-				setOAuthStateCookieHuma(ctx, csrfToken)
+				state := fmt.Sprintf("cli:%d:%s:%s", port, input.SessionNonce, csrfToken)
 
-				scheme := schemeFromCtx(ctx)
-				redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, ctx.Host())
-				authURL := s.oidcAuth.AuthCodeURL(redirectURI, state)
+				// Fix 5: Store CLI session nonce server-side keyed by CSRF token.
+				s.cliSessionNonces.Set(csrfToken, input.SessionNonce)
+
+				redirectURI := s.loginRedirectURI(ctx)
+				authURL, oidcNonce := s.oidcAuth.AuthCodeURL(redirectURI, state)
+				s.setOAuthStateCookieHuma(ctx, csrfToken, oidcNonce)
 
 				ctx.SetHeader("Location", authURL)
 				ctx.SetStatus(http.StatusTemporaryRedirect)
@@ -144,9 +154,11 @@ func (s *Server) handleLoginCallbackHuma(hCtx huma.Context, goCtx context.Contex
 		return
 	}
 
-	// Clear the state cookie.
-	clearCookie := &http.Cookie{Name: "oauth_state", Value: "", Path: "/", MaxAge: -1}
-	hCtx.AppendHeader("Set-Cookie", clearCookie.String())
+	// Clear the state and nonce cookies.
+	clearStateCookie := &http.Cookie{Name: "oauth_state", Value: "", Path: "/", MaxAge: -1}
+	hCtx.AppendHeader("Set-Cookie", clearStateCookie.String())
+	clearNonceCookie := &http.Cookie{Name: "oidc_nonce", Value: "", Path: "/", MaxAge: -1}
+	hCtx.AppendHeader("Set-Cookie", clearNonceCookie.String())
 
 	if input.Code == "" {
 		renderErrorToWriter(hCtx.BodyWriter(), "Missing authorization code.")
@@ -154,11 +166,10 @@ func (s *Server) handleLoginCallbackHuma(hCtx huma.Context, goCtx context.Contex
 	}
 
 	// Build the redirect URI (must match what was sent to the provider).
-	scheme := schemeFromCtx(hCtx)
-	redirectURI := fmt.Sprintf("%s://%s/login/callback", scheme, hCtx.Host())
+	redirectURI := s.loginRedirectURI(hCtx)
 
-	// Exchange the authorization code for tokens.
-	codeResult, err := s.oidcAuth.ExchangeCode(goCtx, input.Code, redirectURI)
+	// Exchange the authorization code for tokens, validating the OIDC nonce.
+	codeResult, err := s.oidcAuth.ExchangeCode(goCtx, input.Code, redirectURI, input.OIDCNonce)
 	if err != nil {
 		slog.Error("code exchange failed", "error", err)
 		renderErrorToWriter(hCtx.BodyWriter(), "Failed to exchange authorization code. Please try again.")
@@ -209,18 +220,26 @@ func (s *Server) handleLoginCallbackHuma(hCtx huma.Context, goCtx context.Contex
 
 	// CLI login flow: redirect to the CLI's local server with the token.
 	if strings.HasPrefix(input.State, "cli:") {
-		port, nonce := parseCLIState(input.State)
-		if port != "" && nonce != "" {
-			cliURL := fmt.Sprintf("http://localhost:%s/?accessToken=%s&nonce=%s",
-				port, url.QueryEscape(result.Token), url.QueryEscape(nonce))
-			hCtx.SetHeader("Location", cliURL)
-			hCtx.SetStatus(http.StatusTemporaryRedirect)
+		portStr, nonce := parseCLIState(input.State)
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port < 1 || port > 65535 {
+			renderErrorToWriter(hCtx.BodyWriter(), "Invalid CLI session port.")
 			return
 		}
+		// Fix 5: Validate CLI session nonce against server-side store.
+		if !s.cliSessionNonces.Validate(csrfToken, nonce) {
+			renderErrorToWriter(hCtx.BodyWriter(), "Invalid CLI session nonce. Please try logging in again.")
+			return
+		}
+		cliURL := fmt.Sprintf("http://localhost:%d/?accessToken=%s&nonce=%s",
+			port, url.QueryEscape(result.Token), url.QueryEscape(nonce))
+		hCtx.SetHeader("Location", cliURL)
+		hCtx.SetStatus(http.StatusTemporaryRedirect)
+		return
 	}
 
 	// Browser login flow: show the token page.
-	loginURL := fmt.Sprintf("%s://%s", scheme, hCtx.Host())
+	loginURL := s.loginBaseURL(hCtx)
 	if err := callbackSuccessTmpl.Execute(hCtx.BodyWriter(), map[string]any{
 		"UserName": result.UserName,
 		"Token":    result.Token,
@@ -233,24 +252,65 @@ func (s *Server) handleLoginCallbackHuma(hCtx huma.Context, goCtx context.Contex
 // --- Helpers ---
 
 func generateCSRFToken() string {
-	b := make([]byte, 16)
+	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return ""
 	}
 	return hex.EncodeToString(b)
 }
 
-// setOAuthStateCookieHuma sets the OAuth state cookie via huma context.
-func setOAuthStateCookieHuma(ctx huma.Context, csrfToken string) {
-	cookie := &http.Cookie{
+// setOAuthStateCookieHuma sets the OAuth state and OIDC nonce cookies.
+func (s *Server) setOAuthStateCookieHuma(ctx huma.Context, csrfToken, oidcNonce string) {
+	secure := isHTTPS(ctx, s.publicURL)
+	stateCookie := &http.Cookie{
 		Name:     "oauth_state",
 		Value:    csrfToken,
 		Path:     "/",
 		MaxAge:   300, // 5 minutes
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
 	}
-	ctx.AppendHeader("Set-Cookie", cookie.String())
+	ctx.AppendHeader("Set-Cookie", stateCookie.String())
+	nonceCookie := &http.Cookie{
+		Name:     "oidc_nonce",
+		Value:    oidcNonce,
+		Path:     "/",
+		MaxAge:   300, // 5 minutes
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+	}
+	ctx.AppendHeader("Set-Cookie", nonceCookie.String())
+}
+
+// isHTTPS returns true if the request uses HTTPS, determined from TLS state,
+// X-Forwarded-Proto header, or the configured public URL.
+func isHTTPS(ctx huma.Context, publicURL string) bool {
+	if ctx.TLS() != nil || ctx.Header("X-Forwarded-Proto") == "https" {
+		return true
+	}
+	return strings.HasPrefix(publicURL, "https://")
+}
+
+// loginRedirectURI returns the OAuth2 redirect URI for the login callback.
+// Uses publicURL when configured to prevent Host header poisoning.
+func (s *Server) loginRedirectURI(ctx huma.Context) string {
+	if s.publicURL != "" {
+		return s.publicURL + "/login/callback"
+	}
+	slog.Warn("public-url not set, using Host header for redirect URI (set --public-url to avoid Host header attacks)")
+	scheme := schemeFromCtx(ctx)
+	return fmt.Sprintf("%s://%s/login/callback", scheme, ctx.Host())
+}
+
+// loginBaseURL returns the base URL for the login page link.
+func (s *Server) loginBaseURL(ctx huma.Context) string {
+	if s.publicURL != "" {
+		return s.publicURL
+	}
+	scheme := schemeFromCtx(ctx)
+	return fmt.Sprintf("%s://%s", scheme, ctx.Host())
 }
 
 // schemeFromCtx determines the request scheme from TLS state and headers.

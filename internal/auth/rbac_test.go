@@ -5,8 +5,17 @@ import (
 	"testing"
 )
 
+func mustNewRBACResolver(t *testing.T, config *RBACConfig) *RBACResolver {
+	t.Helper()
+	r, err := NewRBACResolver(config)
+	if err != nil {
+		t.Fatalf("NewRBACResolver: %v", err)
+	}
+	return r
+}
+
 func TestRBACResolver_AdminBypass(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{DefaultPermission: "read"})
+	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 	identity := &UserIdentity{UserName: "admin", IsAdmin: true}
 
 	perm := resolver.Resolve(identity, "org", "project", "stack")
@@ -16,7 +25,7 @@ func TestRBACResolver_AdminBypass(t *testing.T) {
 }
 
 func TestRBACResolver_DefaultPermission(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{DefaultPermission: "read"})
+	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 	identity := &UserIdentity{UserName: "user@company.com", Groups: []string{"unknown@company.com"}}
 
 	perm := resolver.Resolve(identity, "org", "project", "stack")
@@ -26,7 +35,7 @@ func TestRBACResolver_DefaultPermission(t *testing.T) {
 }
 
 func TestRBACResolver_GroupRole(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{
+	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []GroupRole{
 			{Group: "developers@company.com", Permission: "write"},
@@ -57,7 +66,7 @@ func TestRBACResolver_GroupRole(t *testing.T) {
 }
 
 func TestRBACResolver_StackPolicy(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{
+	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []GroupRole{
 			{Group: "developers@company.com", Permission: "read"},
@@ -118,7 +127,7 @@ func TestRBACResolver_StackPolicy(t *testing.T) {
 }
 
 func TestRBACResolver_NilConfig(t *testing.T) {
-	resolver := NewRBACResolver(nil)
+	resolver := mustNewRBACResolver(t, nil)
 	identity := &UserIdentity{UserName: "anyone"}
 
 	perm := resolver.Resolve(identity, "org", "project", "stack")
@@ -128,7 +137,7 @@ func TestRBACResolver_NilConfig(t *testing.T) {
 }
 
 func TestRBACResolver_NilIdentity(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{DefaultPermission: "read"})
+	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 
 	perm := resolver.Resolve(nil, "org", "project", "stack")
 	if perm != PermissionNone {
@@ -137,7 +146,7 @@ func TestRBACResolver_NilIdentity(t *testing.T) {
 }
 
 func TestRequirePermission_AdminBypass(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{DefaultPermission: "read"})
+	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 	ctx := WithIdentity(context.Background(), &UserIdentity{IsAdmin: true})
 
 	if err := RequirePermission(ctx, resolver, "org", "project", "stack", PermissionAdmin); err != nil {
@@ -146,7 +155,7 @@ func TestRequirePermission_AdminBypass(t *testing.T) {
 }
 
 func TestRequirePermission_Denied(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{DefaultPermission: "read"})
+	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 	ctx := WithIdentity(context.Background(), &UserIdentity{UserName: "user@company.com"})
 
 	err := RequirePermission(ctx, resolver, "org", "project", "stack", PermissionWrite)
@@ -164,7 +173,7 @@ func TestRequirePermission_NilResolver(t *testing.T) {
 }
 
 func TestRBACResolver_OverlappingStackPolicies(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{
+	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "none",
 		StackPolicies: []StackPolicy{
 			{Group: "devs@co.com", StackPattern: "org/app/*", Permission: "read"},
@@ -181,7 +190,7 @@ func TestRBACResolver_OverlappingStackPolicies(t *testing.T) {
 }
 
 func TestRBACResolver_WildcardPatterns(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{
+	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "read",
 		StackPolicies: []StackPolicy{
 			{Group: "admins@co.com", StackPattern: "*/*/*", Permission: "admin"},
@@ -227,7 +236,7 @@ func TestRBACResolver_WildcardPatterns(t *testing.T) {
 }
 
 func TestRBACResolver_EmptyGroups(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{
+	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []GroupRole{
 			{Group: "devs@co.com", Permission: "write"},
@@ -242,7 +251,7 @@ func TestRBACResolver_EmptyGroups(t *testing.T) {
 }
 
 func TestRBACResolver_StackPolicyOverridesGroupRole(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{
+	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "none",
 		GroupRoles: []GroupRole{
 			{Group: "devs@co.com", Permission: "read"},
@@ -261,7 +270,7 @@ func TestRBACResolver_StackPolicyOverridesGroupRole(t *testing.T) {
 }
 
 func TestRBACResolver_InvalidPermissionInConfig(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{
+	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []GroupRole{
 			{Group: "devs@co.com", Permission: "superadmin"},
@@ -276,8 +285,15 @@ func TestRBACResolver_InvalidPermissionInConfig(t *testing.T) {
 	}
 }
 
+func TestNewRBACResolver_InvalidDefaultPermission(t *testing.T) {
+	_, err := NewRBACResolver(&RBACConfig{DefaultPermission: "superpower"})
+	if err == nil {
+		t.Fatal("expected error for invalid default permission")
+	}
+}
+
 func TestRequirePermission_NoIdentity(t *testing.T) {
-	resolver := NewRBACResolver(&RBACConfig{DefaultPermission: "read"})
+	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 	// Context without identity.
 	err := RequirePermission(context.Background(), resolver, "org", "project", "stack", PermissionRead)
 	if err == nil {

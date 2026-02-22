@@ -2,6 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -69,9 +72,13 @@ type OIDCAuthenticator interface {
 	// Revalidate uses a stored refresh token to verify the user is still active.
 	Revalidate(ctx context.Context, refreshToken string) error
 	// AuthCodeURL builds the provider's authorization URL for browser/CLI login.
-	AuthCodeURL(redirectURI, state string) string
+	// Returns the URL and a crypto-random nonce that must be stored and validated
+	// in ExchangeCode to prevent ID token replay attacks.
+	AuthCodeURL(redirectURI, state string) (authURL, nonce string)
 	// ExchangeCode exchanges an authorization code for tokens.
-	ExchangeCode(ctx context.Context, code, redirectURI string) (*CodeExchangeResult, error)
+	// expectedNonce is the nonce returned by AuthCodeURL; it is verified against
+	// the "nonce" claim in the ID token.
+	ExchangeCode(ctx context.Context, code, redirectURI, expectedNonce string) (*CodeExchangeResult, error)
 	// Config returns the authenticator's configuration.
 	Config() OIDCConfig
 }
@@ -292,17 +299,33 @@ func (a *oidcAuthenticator) Revalidate(ctx context.Context, refreshToken string)
 }
 
 // AuthCodeURL builds the provider's authorization URL for browser/CLI login.
-func (a *oidcAuthenticator) AuthCodeURL(redirectURI, state string) string {
+// Generates a crypto-random nonce and includes it in the auth request. The
+// caller must store the nonce and pass it to ExchangeCode for validation.
+func (a *oidcAuthenticator) AuthCodeURL(redirectURI, state string) (string, string) {
+	nonce := generateOIDCNonce()
 	cfg := a.oauth2Config
 	cfg.RedirectURL = redirectURI
-	return cfg.AuthCodeURL(state,
+	url := cfg.AuthCodeURL(state,
 		oauth2.AccessTypeOffline,
 		oauth2.SetAuthURLParam("prompt", "select_account"),
+		oauth2.SetAuthURLParam("nonce", nonce),
 	)
+	return url, nonce
 }
 
-// ExchangeCode exchanges an authorization code for tokens.
-func (a *oidcAuthenticator) ExchangeCode(ctx context.Context, code, redirectURI string) (*CodeExchangeResult, error) {
+// generateOIDCNonce generates a 32-byte crypto-random hex nonce.
+func generateOIDCNonce() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// This should never fail; if it does, the auth flow will fail at nonce validation.
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
+// ExchangeCode exchanges an authorization code for tokens and validates the
+// OIDC nonce claim against the expected value to prevent ID token replay.
+func (a *oidcAuthenticator) ExchangeCode(ctx context.Context, code, redirectURI, expectedNonce string) (*CodeExchangeResult, error) {
 	cfg := a.oauth2Config
 	cfg.RedirectURL = redirectURI
 
@@ -314,6 +337,21 @@ func (a *oidcAuthenticator) ExchangeCode(ctx context.Context, code, redirectURI 
 	idToken, ok := token.Extra("id_token").(string)
 	if !ok || idToken == "" {
 		return nil, errors.New("no id_token in code exchange response")
+	}
+
+	// Validate nonce in the ID token to prevent replay attacks.
+	if expectedNonce != "" {
+		claims, err := a.verifier.Verify(ctx, idToken)
+		if err != nil {
+			return nil, fmt.Errorf("nonce verification: ID token invalid: %w", err)
+		}
+		tokenNonce, _ := claims["nonce"].(string)
+		if tokenNonce == "" {
+			return nil, errors.New("ID token missing nonce claim")
+		}
+		if subtle.ConstantTimeCompare([]byte(expectedNonce), []byte(tokenNonce)) != 1 {
+			return nil, errors.New("ID token nonce mismatch")
+		}
 	}
 
 	return &CodeExchangeResult{

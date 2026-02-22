@@ -142,7 +142,11 @@ func newJWTBackend(t *testing.T, rbacConfig *auth.RBACConfig) *testBackend {
 		api.WithJWTAuth(jwtAuth),
 	}
 	if rbacConfig != nil {
-		opts = append(opts, api.WithRBAC(auth.NewRBACResolver(rbacConfig)))
+		rbacResolver, err := auth.NewRBACResolver(rbacConfig)
+		if err != nil {
+			t.Fatalf("NewRBACResolver: %v", err)
+		}
+		opts = append(opts, api.WithRBAC(rbacResolver))
 	}
 	return startBackendWithOpts(t, opts...)
 }
@@ -602,7 +606,11 @@ func newOIDCBackend(t *testing.T, rbacConfig *auth.RBACConfig, groups map[string
 		opts = append(opts, api.WithGroupsCache(groupsCache))
 	}
 	if rbacConfig != nil {
-		opts = append(opts, api.WithRBAC(auth.NewRBACResolver(rbacConfig)))
+		rbacResolver, err := auth.NewRBACResolver(rbacConfig)
+		if err != nil {
+			t.Fatalf("NewRBACResolver: %v", err)
+		}
+		opts = append(opts, api.WithRBAC(rbacResolver))
 	}
 	opts = append(opts, extraOpts...)
 
@@ -701,7 +709,11 @@ func newOIDCBackendWithRefresher(t *testing.T, rbacConfig *auth.RBACConfig, grou
 		opts = append(opts, api.WithGroupsCache(groupsCache))
 	}
 	if rbacConfig != nil {
-		opts = append(opts, api.WithRBAC(auth.NewRBACResolver(rbacConfig)))
+		rbacResolver, err := auth.NewRBACResolver(rbacConfig)
+		if err != nil {
+			t.Fatalf("NewRBACResolver: %v", err)
+		}
+		opts = append(opts, api.WithRBAC(rbacResolver))
 	}
 
 	srv := api.NewServer(mgr, "organization", "test-user", opts...)

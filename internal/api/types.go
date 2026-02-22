@@ -542,6 +542,7 @@ type LoginCallbackInput struct {
 	State      string `query:"state"`
 	OAuthError string `query:"error"`
 	OAuthState string `cookie:"oauth_state"`
+	OIDCNonce  string `cookie:"oidc_nonce"`
 }
 
 type CLILoginInput struct {
@@ -617,6 +618,11 @@ type AccessTokenInfo struct {
 	Created     string `json:"created" doc:"ISO 8601 timestamp"`
 }
 
+// ListPersonalTokensInput is the query parameters for listing personal tokens.
+type ListPersonalTokensInput struct {
+	Filter string `query:"filter" doc:"Optional filter for token listing"`
+}
+
 // ListPersonalTokensOutput is the response listing the current user's tokens.
 type ListPersonalTokensOutput struct {
 	Body struct {
@@ -626,7 +632,8 @@ type ListPersonalTokensOutput struct {
 
 // CreatePersonalTokenInput is the request body for creating a personal token.
 type CreatePersonalTokenInput struct {
-	Body struct {
+	Reason string `query:"reason" doc:"Tracks the context that triggered token creation"`
+	Body   struct {
 		Description string `json:"description" doc:"Token description"`
 		Expires     int64  `json:"expires" doc:"Expiration unix epoch seconds, 0 for never"`
 	}
@@ -650,6 +657,12 @@ type DeletePersonalTokenInput struct {
 // OrgNameInput is a common path parameter for org-scoped endpoints.
 type OrgNameInput struct {
 	OrgName string `path:"orgName" doc:"Organization name"`
+}
+
+// ListRolesInput adds the optional uxPurpose query param to org-scoped role listing.
+type ListRolesInput struct {
+	OrgNameInput
+	UXPurpose string `query:"uxPurpose" doc:"UX context hint for role filtering"`
 }
 
 // ListTeamsOutput is the response listing teams.

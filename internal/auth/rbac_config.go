@@ -35,6 +35,8 @@ func (p Permission) String() string {
 // ParsePermission converts a string to a Permission.
 func ParsePermission(s string) (Permission, error) {
 	switch s {
+	case "none":
+		return PermissionNone, nil
 	case "read":
 		return PermissionRead, nil
 	case "write":

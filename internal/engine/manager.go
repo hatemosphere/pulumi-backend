@@ -113,7 +113,11 @@ func NewManager(store storage.Store, secrets *SecretsEngine, cfgs ...ManagerConf
 	if err != nil {
 		return nil, err
 	}
-	secretsCache, err := lru.New[string, []byte](cfg.CacheSize)
+	secretsCache, err := lru.NewWithEvict[string, []byte](cfg.CacheSize, func(_ string, value []byte) {
+		for i := range value {
+			value[i] = 0
+		}
+	})
 	if err != nil {
 		return nil, err
 	}

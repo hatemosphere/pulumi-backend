@@ -20,18 +20,19 @@ type RBACResolver struct {
 
 // NewRBACResolver creates a resolver from the given config.
 // If config is nil, all users are treated as admin (single-tenant fallback).
-func NewRBACResolver(config *RBACConfig) *RBACResolver {
+// Returns an error if the config's DefaultPermission is invalid.
+func NewRBACResolver(config *RBACConfig) (*RBACResolver, error) {
 	if config == nil {
-		return &RBACResolver{defaultPermission: PermissionAdmin}
+		return &RBACResolver{defaultPermission: PermissionAdmin}, nil
 	}
 	dp, err := ParsePermission(config.DefaultPermission)
 	if err != nil {
-		dp = PermissionRead // safe default
+		return nil, fmt.Errorf("invalid default permission %q: %w", config.DefaultPermission, err)
 	}
 	return &RBACResolver{
 		config:            config,
 		defaultPermission: dp,
-	}
+	}, nil
 }
 
 // Config returns the underlying RBAC configuration (may be nil if no config was loaded).

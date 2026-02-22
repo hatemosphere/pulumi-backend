@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -85,6 +86,12 @@ type Config struct {
 	LogFormat string // "json" (default) or "text"
 	AuditLogs bool   // enable audit logging (default true)
 
+	// Security.
+	TrustedProxies string // comma-separated CIDRs for trusted proxy validation
+
+	// Public URL for redirect URI construction (mitigates Host header poisoning).
+	PublicURL string
+
 	// Profiling.
 	PprofEnabled bool // enable pprof endpoints at /debug/pprof/
 
@@ -167,6 +174,12 @@ func Parse() *Config {
 	fs.StringVar(&c.LogFormat, "log-format", "json", "log format: json or text")
 	fs.BoolVar(&c.AuditLogs, "audit-logs", true, "enable structured audit logging")
 
+	// Security flags.
+	fs.StringVar(&c.TrustedProxies, "trusted-proxies", "", "comma-separated CIDRs for trusted proxy validation (empty = trust all)")
+
+	// Public URL flag.
+	fs.StringVar(&c.PublicURL, "public-url", "", "public base URL for redirect URIs (e.g. https://pulumi.example.com)")
+
 	// Profiling flags.
 	fs.BoolVar(&c.PprofEnabled, "pprof", false, "enable pprof profiling endpoints at /debug/pprof/")
 
@@ -190,8 +203,9 @@ func Parse() *Config {
 			os.Exit(1)
 		}
 		c.MasterKey = hex.EncodeToString(key)
-		fmt.Fprintf(os.Stderr, "WARNING: auto-generated master key (will not survive restart unless you persist it):\n")
-		fmt.Fprintf(os.Stderr, "  export PULUMI_BACKEND_MASTER_KEY=%s\n\n", c.MasterKey)
+		h := sha256.Sum256([]byte(c.MasterKey))
+		fmt.Fprintf(os.Stderr, "WARNING: auto-generated master key (fingerprint: %s). Will not survive restart.\n", hex.EncodeToString(h[:8]))
+		fmt.Fprintf(os.Stderr, "  Set PULUMI_BACKEND_MASTER_KEY to persist it.\n\n")
 	}
 
 	return c
