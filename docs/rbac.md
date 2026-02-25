@@ -1,6 +1,6 @@
 # RBAC Configuration
 
-Role-Based Access Control (RBAC) restricts what users can do based on their group memberships. Works with both Google OIDC and JWT authentication modes.
+Role-Based Access Control (RBAC) restricts what users can do based on their group memberships. Works with Google OIDC, generic OIDC, and JWT authentication modes.
 
 ## Overview
 
@@ -130,8 +130,8 @@ You should use `stackPolicies` with `*` wildcards to grant "Organization Admins"
 System-wide Admin endpoints (`/api/admin/*`) require the **Global Admin** permission level. This is determined by:
 
 1. **Single-tenant mode**: All users are global admins automatically.
-2. **Google/JWT mode with RBAC**: Users whose group resolves to `admin` permission via `groupRoles` get global admin access. 
-3. **Google/JWT mode without RBAC**: Admin endpoints are inaccessible (no way to grant global admin).
+2. **Google/OIDC/JWT mode with RBAC**: Users whose group resolves to `admin` permission via `groupRoles` get global admin access.
+3. **Google/OIDC/JWT mode without RBAC**: Admin endpoints are inaccessible (no way to grant global admin).
 
 Global Admin endpoints include:
 - `POST /api/admin/backup` — Create a database SQLite backup safely using `VACUUM INTO`
@@ -146,4 +146,4 @@ Global Admin endpoints include:
 export PULUMI_BACKEND_RBAC_CONFIG=rbac.yaml
 ```
 
-RBAC requires an auth mode that provides group information (`google` or `jwt`). In `single-tenant` mode, RBAC configuration is ignored since all users are treated as admin.
+RBAC requires an auth mode that provides group information (`google`, `oidc`, or `jwt`). In `single-tenant` mode, RBAC configuration is ignored since all users are treated as admin.

@@ -188,7 +188,7 @@ The backend's CPU profile is typically dominated by:
 
 Key allocators to watch:
 
-1. **`compress/flate.NewWriter`** — allocates ~800KB per call. Pooled via `sync.Pool` in both `engine/manager.go` and `storage/sqlite.go`
+1. **`compress/flate.NewWriter`** — allocates ~800KB per call. Pooled via `sync.Pool` in `internal/gziputil/gziputil.go`
 2. **`io.ReadAll` / buffer growth** — decompression path. Mitigated by pre-sized `bytes.Buffer` from pool
 3. **`json.Unmarshal` into `map[string]any`** — inherent, but minimized by using targeted struct unmarshaling where possible
 
@@ -214,9 +214,9 @@ When optimizing allocations:
 
 ## Implemented optimizations
 
-### sync.Pool for gzip compression (engine + storage layers)
+### sync.Pool for gzip compression
 
-`gzip.Writer` and `bytes.Buffer` are pooled in both `internal/engine/manager.go` and `internal/storage/sqlite.go`. Each `compress/flate.NewWriter` call allocates ~800KB of internal tables — pooling amortizes this to near-zero for steady-state workloads.
+`gzip.Writer` and `bytes.Buffer` are pooled in `internal/gziputil/gziputil.go`, shared by both engine and storage layers. Each `compress/flate.NewWriter` call allocates ~800KB of internal tables — pooling amortizes this to near-zero for steady-state workloads.
 
 ### Pre-computed resource counts
 

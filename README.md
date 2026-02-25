@@ -1,6 +1,6 @@
 # pulumi-backend
 
-A self-hosted Pulumi state backend that implements the Pulumi Cloud HTTP API. Single binary, SQLite storage, no cloud dependencies required.
+A self-hosted Pulumi state backend that implements the Pulumi Cloud HTTP API. Single binary, SQLite storage. Runs locally with zero cloud dependencies; optionally integrates with GCP KMS, S3-compatible storage, and OIDC providers.
 
 ## Why
 
@@ -208,7 +208,6 @@ go test -v ./tests/ -run TestCLIErrorSemantics             # CLI error message c
 go test -v ./tests/ -run TestDeclaredErrorCodes            # error code coverage + exercised
 go test -v ./tests/ -run TestReliability                   # state consistency / reliability tests
 go test -bench . -benchmem -timeout 120s ./tests/          # benchmarks (engine + HTTP)
-go test -timeout 600s ./tests/ -count=1                    # full suite (with pulumi in PATH)
 ```
 
 ### Reliability tests

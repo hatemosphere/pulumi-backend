@@ -14,6 +14,8 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 - **engine/** — Business logic: stack locks, LRU cache, delta/journal replay, AES-256-GCM secrets
 - **backup/** — Remote backup providers (S3-compatible), scheduler, retention pruning
 - **storage/** — `Store` interface + SQLite impl. Deployments stored gzip-compressed.
+- **gziputil/** — Shared gzip compress/decompress with `sync.Pool` and decompression bomb protection
+- **audit/** — Structured audit logging (`audit.Event` struct, `slog.Group("audit", ...)` format)
 - **config/** — Flag + env var parsing via [ff/v3](https://github.com/peterbourgon/ff) (`PULUMI_BACKEND_*` prefix, auto-mapped from flag names)
 
 ## Key files
@@ -35,6 +37,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | `internal/auth/groups_cache.go` | TTL + singleflight cache for group lookups |
 | `internal/auth/oidc.go` | Generic OIDC authenticator (OIDCAuthenticator interface), Google specialization, test mock constructors |
 | `internal/api/login.go` | Browser + CLI login (GET /login, /login/callback, /cli-login), refresh token capture |
+| `internal/gziputil/gziputil.go` | Shared gzip compress/decompress pools (used by engine + storage) |
 | `internal/engine/manager.go` | Core logic |
 | `internal/engine/journal.go` | Journal replay algorithm |
 | `internal/engine/delta.go` | Byte-offset delta application |
@@ -53,6 +56,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 ## Reference code
 
 - `reference/pulumi/` — Upstream Pulumi source clone (for API shape reference)
+- `reference/huma/` — huma v2 framework source (adapter patterns, middleware)
 - `reference/dex/` — Dex OIDC connector reference (Google connector refresh token pattern)
 - `reference/ff/` — ff library source (flags-first config parsing)
 - `reference/s3-mock/` — grafana/s3-mock clone (in-process S3 mock for backup tests)
@@ -67,7 +71,6 @@ go test -v -timeout 600s ./tests/ -count=1                # all tests including 
 go test -v -run TestAPISpecSchemaCompliance ./tests/      # spec compliance
 go test -v -run TestReliability ./tests/                  # state consistency / reliability tests
 go test -bench . -benchmem -timeout 120s ./tests/         # benchmarks (engine + HTTP, not in CI)
-go test -timeout 600s ./tests/ -count=1                   # full suite
 golangci-lint run ./...                                   # lint
 ```
 
@@ -99,7 +102,7 @@ golangci-lint run ./...                                   # lint
 - **Backup**: `VACUUM INTO` creates consistent point-in-time SQLite snapshots. In WAL mode, uses shared/read lock only — concurrent writes are NOT blocked. Backups uploaded to S3-compatible providers via `backup.Provider` interface. `backup.Scheduler` runs periodic backups (ticker goroutine, same pattern as `eventFlusher`). `backup.Prune` enforces retention policy. Engine's `Backup()` returns `*BackupResult{LocalPath, RemoteKeys}`. Admin API: `POST /api/admin/backup`. AWS credentials via standard SDK chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, IAM role, instance metadata).
 - **Backup tests**: Unit tests use `grafana/s3-mock` (in-process mock S3 server that returns real `*s3.Client` — no interface mocking needed). Integration tests in `reliability_test.go` verify backup during active updates, concurrent checkpoints, and no-destination error.
 - **Profiling**: `--pprof` flag / `PULUMI_BACKEND_PPROF=true` enables `/debug/pprof/` endpoints (no auth, dev only). See `docs/performance.md`.
-- **Compression pooling**: `gzip.Writer` and `bytes.Buffer` are pooled via `sync.Pool` in both `engine/manager.go` and `storage/sqlite.go`. Each `compress/flate.NewWriter` allocates ~800KB — pooling amortizes to near-zero.
+- **Compression pooling**: `gzip.Writer` and `bytes.Buffer` are pooled via `sync.Pool` in `internal/gziputil/`. Each `compress/flate.NewWriter` allocates ~800KB — pooling amortizes to near-zero. Includes 512MB decompression bomb limit.
 - **Resource count pre-computation**: `storage.CountResources()` runs in the engine layer on uncompressed JSON before compression. Passed to storage via `StackState.ResourceCount` to avoid decompressing in the storage layer.
 - Deployments: gzip-compressed in DB, zero-copy gzip export when client accepts it
 - Leases: in-memory `sync.Map` + SQLite; lost on restart
