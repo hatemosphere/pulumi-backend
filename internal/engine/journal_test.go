@@ -14,8 +14,6 @@ func raw(s string) *json.RawMessage {
 	return &r
 }
 
-// Helper to create int64 pointer
-
 func TestReplayJournalEntries_Basic(t *testing.T) {
 	base := checkpoint{
 		Version: 3,
