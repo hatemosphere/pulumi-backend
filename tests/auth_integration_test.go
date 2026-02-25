@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -508,9 +509,7 @@ func (v *testOIDCValidator) Verify(_ context.Context, rawToken string) (map[stri
 
 	// Convert to map[string]any.
 	result := make(map[string]any, len(claims))
-	for k, val := range claims {
-		result[k] = val
-	}
+	maps.Copy(result, claims)
 	return result, nil
 }
 

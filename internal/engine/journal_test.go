@@ -15,9 +15,6 @@ func raw(s string) *json.RawMessage {
 }
 
 // Helper to create int64 pointer
-func i64(i int64) *int64 {
-	return &i
-}
 
 func TestReplayJournalEntries_Basic(t *testing.T) {
 	base := checkpoint{
@@ -74,7 +71,7 @@ func TestReplayJournalEntries_Update(t *testing.T) {
 			SequenceID:  2,
 			OperationID: 1,
 			State:       raw(`{"urn":"urn:pulumi:stack::proj::type::res1","prop":"new"}`),
-			RemoveOld:   i64(0), // Replace index 0
+			RemoveOld:   new(int64(0)), // Replace index 0
 		},
 	}
 
@@ -106,7 +103,7 @@ func TestReplayJournalEntries_Delete(t *testing.T) {
 			Kind:        JournalSuccess,
 			SequenceID:  2,
 			OperationID: 1,
-			DeleteOld:   i64(0), // Delete index 0 (res1)
+			DeleteOld:   new(int64(0)), // Delete index 0 (res1)
 		},
 	}
 
@@ -140,7 +137,7 @@ func TestReplayJournalEntries_Interleaved(t *testing.T) {
 			Kind:        JournalSuccess,
 			SequenceID:  3,
 			OperationID: 2,
-			DeleteOld:   i64(0),
+			DeleteOld:   new(int64(0)),
 		},
 
 		// Finish Create res3
@@ -179,7 +176,7 @@ func TestReplayJournalEntries_Refresh(t *testing.T) {
 			OperationID: 1,
 			State:       raw(`{"urn":"res1","val":"refreshed"}`),
 			IsRefresh:   true,
-			RemoveOld:   i64(0), // Update index 0
+			RemoveOld:   new(int64(0)), // Update index 0
 		},
 	}
 

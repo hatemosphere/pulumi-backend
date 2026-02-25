@@ -70,8 +70,3 @@ func copyBody(src []byte) json.RawMessage {
 	copy(dst, src)
 	return dst
 }
-
-// ptrString returns a pointer to s.
-func ptrString(s string) *string {
-	return &s
-}

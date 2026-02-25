@@ -3,10 +3,12 @@ linters:
   enable:
     - copyloopvar
     - durationcheck
+    - intrange
     - exhaustive
     - goprintffuncname
     - gosec
     - misspell
+    - modernize
     - nakedret
     - nolintlint
     - perfsprint
@@ -57,6 +59,10 @@ linters:
       - linters:
           - gosec
         text: 'G306: Expect WriteFile permissions'
+        path: _test\.go$
+      - linters:
+          - staticcheck
+        text: 'SA5011'
         path: _test\.go$
     paths:
       - testdata$

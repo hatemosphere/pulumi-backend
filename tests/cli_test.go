@@ -92,8 +92,8 @@ runtime: yaml
 
 	// Verify current stack is dev.
 	out := tb.pulumi(t, dir, "stack", "ls")
-	lines := strings.Split(out, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(out, "\n")
+	for line := range lines {
 		if strings.Contains(line, "dev") && strings.Contains(line, "*") {
 			return
 		}
@@ -1556,11 +1556,11 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	for i := 1; i <= 5; i++ {
-		_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(fmt.Sprintf(`name: test-project
+		_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), fmt.Appendf(nil, `name: test-project
 runtime: yaml
 outputs:
   value: "v%d"
-`, i)), 0o644)
+`, i), 0o644)
 		tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
 	}
 
@@ -1613,11 +1613,11 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	for i := 1; i <= 12; i++ {
-		_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(fmt.Sprintf(`name: test-project
+		_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), fmt.Appendf(nil, `name: test-project
 runtime: yaml
 outputs:
   value: "v%d"
-`, i)), 0o644)
+`, i), 0o644)
 		tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
 	}
 
@@ -1660,7 +1660,7 @@ func TestLargeState(t *testing.T) {
 
 	var outputs strings.Builder
 	outputs.WriteString("name: large-project\nruntime: yaml\noutputs:\n")
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		fmt.Fprintf(&outputs, "  key%03d: \"%s\"\n", i, strings.Repeat("x", 200))
 	}
 
@@ -1680,7 +1680,7 @@ func TestLargeState(t *testing.T) {
 		t.Fatalf("expected large state (>5KB), got %d bytes", len(exported))
 	}
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		key := fmt.Sprintf("key%03d", i)
 		if !strings.Contains(exported, key) {
 			t.Fatalf("expected %s in export, not found", key)

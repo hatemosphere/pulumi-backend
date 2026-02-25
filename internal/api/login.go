@@ -324,8 +324,8 @@ func schemeFromCtx(ctx huma.Context) string {
 // extractCSRFToken extracts the CSRF token from the OAuth state string.
 // State formats: "csrf:<token>" or "cli:<port>:<nonce>:<token>".
 func extractCSRFToken(state string) string {
-	if strings.HasPrefix(state, "csrf:") {
-		return strings.TrimPrefix(state, "csrf:")
+	if after, ok := strings.CutPrefix(state, "csrf:"); ok {
+		return after
 	}
 	if strings.HasPrefix(state, "cli:") {
 		parts := strings.SplitN(state, ":", 4)

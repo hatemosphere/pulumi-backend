@@ -159,7 +159,7 @@ func disableAuditForTest(t testing.TB) {
 // waitForBackend polls the backend health endpoint until it responds or the timeout expires.
 func waitForBackend(t testing.TB, baseURL string) {
 	t.Helper()
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		resp, err := http.Get(baseURL + "/")
 		if err == nil {
 			resp.Body.Close()

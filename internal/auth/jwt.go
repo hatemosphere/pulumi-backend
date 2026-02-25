@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -45,10 +46,8 @@ func NewJWTAuthenticator(config JWTConfig) (*JWTAuthenticator, error) {
 
 	keyFunc := func(token *jwt.Token) (any, error) {
 		method := token.Method.Alg()
-		for _, m := range validMethods {
-			if method == m {
-				return signingKey, nil
-			}
+		if slices.Contains(validMethods, method) {
+			return signingKey, nil
 		}
 		return nil, fmt.Errorf("unexpected signing method: %s", method)
 	}

@@ -124,7 +124,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		out.Body.Status = u.Status
 		out.Body.Events = []any{}
 		if u.Status == "in-progress" || u.Status == "not-started" {
-			out.Body.ContinuationToken = ptrString("")
+			out.Body.ContinuationToken = new("")
 		}
 		return out, nil
 	})
@@ -346,7 +346,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		out.Body.Events = eventPayloads
 
 		if u.Status == "in-progress" || u.Status == "not-started" {
-			out.Body.ContinuationToken = ptrString(strconv.Itoa(offset + len(events)))
+			out.Body.ContinuationToken = new(strconv.Itoa(offset + len(events)))
 		}
 		return out, nil
 	})

@@ -412,7 +412,7 @@ func main() {
 
 func parseCSVList(s string) []string {
 	var result []string
-	for _, v := range strings.Split(s, ",") {
+	for v := range strings.SplitSeq(s, ",") {
 		v = strings.TrimSpace(v)
 		if v != "" {
 			result = append(result, v)

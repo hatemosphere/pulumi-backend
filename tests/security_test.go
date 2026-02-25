@@ -373,7 +373,7 @@ func TestGzipBombRejection(t *testing.T) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	zeros := make([]byte, 1<<20) // 1MB of zeros
-	for i := 0; i < 300; i++ {   // 300MB decompressed
+	for range 300 {              // 300MB decompressed
 		if _, err := gz.Write(zeros); err != nil {
 			t.Fatalf("gzip write: %v", err)
 		}

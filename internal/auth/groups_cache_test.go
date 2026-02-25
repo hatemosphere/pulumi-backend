@@ -159,9 +159,7 @@ func TestGroupsCache_ConcurrentAccess(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			groups, err := cache.ResolveGroups(context.Background(), "alice@example.com")
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
@@ -170,7 +168,7 @@ func TestGroupsCache_ConcurrentAccess(t *testing.T) {
 			if len(groups) != 1 || groups[0] != "devs" {
 				t.Errorf("unexpected groups: %v", groups)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

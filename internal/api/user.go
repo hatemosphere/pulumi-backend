@@ -59,7 +59,7 @@ func (s *Server) registerUser(api huma.API) {
 		out := &ListUserStacksOutput{}
 		out.Body.Stacks = stacksToSummaries(stacks, true)
 		if nextToken != "" {
-			out.Body.ContinuationToken = ptrString(nextToken)
+			out.Body.ContinuationToken = new(nextToken)
 		}
 		return out, nil
 	})
@@ -93,7 +93,7 @@ func (s *Server) registerUser(api huma.API) {
 		out := &ListOrgStacksOutput{}
 		out.Body.Stacks = stacksToSummaries(stacks, false)
 		if nextToken != "" {
-			out.Body.ContinuationToken = ptrString(nextToken)
+			out.Body.ContinuationToken = new(nextToken)
 		}
 		return out, nil
 	})

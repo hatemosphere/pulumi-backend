@@ -2350,15 +2350,13 @@ func TestReliability_BackupDuringConcurrentCheckpoints(t *testing.T) {
 	}
 
 	// Trigger backup concurrently.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		resp := tb.httpDo(t, "POST", "/api/admin/backup", nil)
 		resp.Body.Close()
 		if resp.StatusCode != 200 {
 			errs <- fmt.Errorf("backup during concurrent checkpoints: status %d", resp.StatusCode)
 		}
-	}()
+	})
 
 	wg.Wait()
 	close(errs)

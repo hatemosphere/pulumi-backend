@@ -60,7 +60,7 @@ func TestGroupsResolutionADC(t *testing.T) {
 	}
 
 	expected := make(map[string]bool)
-	for _, g := range strings.Split(expectedStr, ",") {
+	for g := range strings.SplitSeq(expectedStr, ",") {
 		g = strings.TrimSpace(g)
 		if g != "" {
 			expected[g] = false
