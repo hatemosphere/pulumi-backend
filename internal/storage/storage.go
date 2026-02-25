@@ -104,6 +104,7 @@ type SecretsKeyEntry struct {
 type Store interface {
 	// Lifecycle
 	Close() error
+	Ping(ctx context.Context) error
 
 	// Stacks
 	CreateStack(ctx context.Context, s *Stack) error

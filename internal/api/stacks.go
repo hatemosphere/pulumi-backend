@@ -95,6 +95,7 @@ func (s *Server) registerStacks(api huma.API) {
 			return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
 		}
 
+		stackOperationsTotal.WithLabelValues("create").Inc()
 		return &CreateStackOutput{}, nil
 	})
 
@@ -142,6 +143,7 @@ func (s *Server) registerStacks(api huma.API) {
 		if err != nil {
 			return nil, huma.NewError(http.StatusBadRequest, err.Error())
 		}
+		stackOperationsTotal.WithLabelValues("delete").Inc()
 		return nil, nil
 	})
 
@@ -193,6 +195,7 @@ func (s *Server) registerStacks(api huma.API) {
 			}
 			return nil, internalError(err)
 		}
+		stackOperationsTotal.WithLabelValues("rename").Inc()
 		return nil, nil
 	})
 
@@ -255,6 +258,7 @@ func (s *Server) registerStacks(api huma.API) {
 			return nil, conflictOrInternalError(err)
 		}
 
+		stackOperationsTotal.WithLabelValues("import").Inc()
 		out := &ImportStackOutput{}
 		out.Body.UpdateID = result.UpdateID
 		return out, nil

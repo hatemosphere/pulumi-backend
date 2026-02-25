@@ -139,9 +139,16 @@ func (s *Server) registerUpdates(api huma.API) {
 		DefaultStatus: 200,
 		Errors:        []int{409},
 	}, func(ctx context.Context, input *CompleteUpdateInput) (*struct{}, error) {
+		// Fetch update before completing to record duration metric.
+		u, _ := s.engine.GetUpdate(ctx, input.UpdateID)
+
 		err := s.engine.CompleteUpdate(ctx, input.UpdateID, input.Body.Status, input.Body.Result)
 		if err != nil {
 			return nil, conflictOrInternalError(err)
+		}
+
+		if u != nil && u.StartedAt != nil {
+			updateDuration.WithLabelValues(u.Kind, input.Body.Status).Observe(time.Since(*u.StartedAt).Seconds())
 		}
 		return nil, nil
 	})
@@ -208,6 +215,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		if err != nil {
 			return nil, conflictOrInternalError(err)
 		}
+		checkpointBytes.WithLabelValues("full").Observe(float64(len(full)))
 		return nil, nil
 	})
 
@@ -224,6 +232,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		if err != nil {
 			return nil, conflictOrInternalError(err)
 		}
+		checkpointBytes.WithLabelValues("verbatim").Observe(float64(len(input.Body.UntypedDeployment)))
 		return nil, nil
 	})
 
@@ -240,6 +249,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		if err != nil {
 			return nil, conflictOrInternalError(err)
 		}
+		checkpointBytes.WithLabelValues("delta").Observe(float64(len(input.Body.DeploymentDelta)))
 		return nil, nil
 	})
 

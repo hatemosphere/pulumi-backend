@@ -10,9 +10,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/XSAM/otelsql"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+
 	"github.com/hatemosphere/pulumi-backend/internal/gziputil"
 	_ "modernc.org/sqlite"
 )
+
+func (s *SQLiteStore) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
 
 func unixToTimePtr(v *int64) *time.Time {
 	if v == nil {
@@ -44,7 +51,10 @@ type SQLiteStore struct {
 }
 
 func NewSQLiteStore(path string, cfgs ...SQLiteStoreConfig) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous(normal)&_pragma=foreign_keys(on)")
+	db, err := otelsql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous(normal)&_pragma=foreign_keys(on)",
+		otelsql.WithAttributes(semconv.DBSystemSqlite),
+		otelsql.WithSpanOptions(otelsql.SpanOptions{DisableErrSkip: true}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}

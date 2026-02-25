@@ -22,7 +22,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 
 | Path | Purpose |
 |---|---|
-| `cmd/pulumi-backend/main.go` | Entry point, wiring |
+| `cmd/pulumi-backend/main.go` | Entry point, wiring, OTel TracerProvider setup |
 | `internal/api/router.go` | Server, huma config, all middleware (auth, RBAC, metrics, logging, audit) |
 | `internal/api/types.go` | All huma request/response structs |
 | `internal/api/errors.go` | Custom PulumiError overriding huma defaults + shared handler helpers (`internalError`, `conflictOrInternalError`, `requireIdentity`, `copyBody`, `ptrString`) |
@@ -102,6 +102,10 @@ golangci-lint run ./...                                   # lint
 - **Backup**: `VACUUM INTO` creates consistent point-in-time SQLite snapshots. In WAL mode, uses shared/read lock only — concurrent writes are NOT blocked. Backups uploaded to S3-compatible providers via `backup.Provider` interface. `backup.Scheduler` runs periodic backups (ticker goroutine, same pattern as `eventFlusher`). `backup.Prune` enforces retention policy. Engine's `Backup()` returns `*BackupResult{LocalPath, RemoteKeys}`. Admin API: `POST /api/admin/backup`. AWS credentials via standard SDK chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, IAM role, instance metadata).
 - **Backup tests**: Unit tests use `grafana/s3-mock` (in-process mock S3 server that returns real `*s3.Client` — no interface mocking needed). Integration tests in `reliability_test.go` verify backup during active updates, concurrent checkpoints, and no-destination error.
 - **Profiling**: `--pprof` flag / `PULUMI_BACKEND_PPROF=true` enables `/debug/pprof/` endpoints (no auth, dev only). See `docs/performance.md`.
+- **Health probes**: `/healthz` (liveness — always 200), `/readyz` (readiness — pings SQLite, returns 200 or 503). Both on publicAPI (no auth). Kubernetes-standard paths. When `--management-addr` is set, probes and `/metrics` are served on a separate management port (not exposed on the main API port).
+- **Management port**: `--management-addr` / `PULUMI_BACKEND_MANAGEMENT_ADDR` (e.g., `:9090`) serves `/healthz`, `/readyz`, `/metrics` on a dedicated HTTP server. When set, these endpoints are removed from the main mux via `WithSkipManagementRoutes()` option.
+- **OpenTelemetry tracing**: Enabled via `--otel-service-name` / `PULUMI_BACKEND_OTEL_SERVICE_NAME`. Three layers of instrumentation: (1) `otelhttp.NewHandler` wraps entire HTTP handler for per-request spans, (2) engine-level spans via `otel.Tracer("pulumi-backend/engine")` for business operations (CreateStack, ExportState, SaveCheckpoint, etc.), (3) `XSAM/otelsql` wraps `database/sql` driver for automatic SQL query spans. OTLP gRPC exporter configured via standard `OTEL_EXPORTER_OTLP_ENDPOINT` env var. TracerProvider with batch span processor and W3C TraceContext + Baggage propagators. Graceful shutdown flushes pending spans.
+- **Prometheus metrics**: `http_requests_total`, `http_request_duration_seconds`, `active_updates` (existing) + `pulumi_backend_stack_operations_total{operation}` (counter), `pulumi_backend_update_duration_seconds{kind,status}` (histogram, 1-1800s buckets), `pulumi_backend_checkpoint_bytes{mode}` (histogram, 1KB-16MB exponential buckets). Registered in `internal/api/metrics.go`.
 - **Compression pooling**: `gzip.Writer` and `bytes.Buffer` are pooled via `sync.Pool` in `internal/gziputil/`. Each `compress/flate.NewWriter` allocates ~800KB — pooling amortizes to near-zero. Includes 512MB decompression bomb limit.
 - **Resource count pre-computation**: `storage.CountResources()` runs in the engine layer on uncompressed JSON before compression. Passed to storage via `StackState.ResourceCount` to avoid decompressing in the storage layer.
 - Deployments: gzip-compressed in DB, zero-copy gzip export when client accepts it

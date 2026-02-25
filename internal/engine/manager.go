@@ -17,10 +17,16 @@ import (
 	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/hatemosphere/pulumi-backend/internal/backup"
 	"github.com/hatemosphere/pulumi-backend/internal/gziputil"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
+
+var tracer = otel.Tracer("pulumi-backend/engine")
 
 // Sentinel errors for update state conflicts (mapped to HTTP 409 in the API layer).
 var (
@@ -111,7 +117,7 @@ func NewManager(store storage.Store, secrets *SecretsEngine, cfgs ...ManagerConf
 	if err != nil {
 		return nil, err
 	}
-	secretsCache, err := lru.NewWithEvict[string, []byte](cfg.CacheSize, func(_ string, value []byte) {
+	secretsCache, err := lru.NewWithEvict(cfg.CacheSize, func(_ string, value []byte) {
 		for i := range value {
 			value[i] = 0
 		}
@@ -158,6 +164,11 @@ func (m *Manager) Shutdown() {
 }
 
 // ActiveUpdateCount returns the number of currently active (in-progress) updates.
+// Ping checks that the underlying storage is reachable.
+func (m *Manager) Ping(ctx context.Context) error {
+	return m.store.Ping(ctx)
+}
+
 func (m *Manager) ActiveUpdateCount() int64 {
 	return m.activeUpdates.Load()
 }
@@ -169,6 +180,9 @@ func stackKey(org, project, stack string) string {
 // --- Stack Operations ---
 
 func (m *Manager) CreateStack(ctx context.Context, org, project, stackName string, tags map[string]string) error {
+	ctx, span := tracer.Start(ctx, "engine.CreateStack",
+		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stackName))))
+	defer span.End()
 	if tags == nil {
 		tags = map[string]string{}
 	}
@@ -185,6 +199,9 @@ func (m *Manager) GetStack(ctx context.Context, org, project, stack string) (*st
 }
 
 func (m *Manager) DeleteStack(ctx context.Context, org, project, stack string, force bool) error {
+	ctx, span := tracer.Start(ctx, "engine.DeleteStack",
+		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stack))))
+	defer span.End()
 	if !force {
 		state, err := m.store.GetCurrentState(ctx, org, project, stack)
 		if err != nil {
@@ -228,6 +245,8 @@ func (m *Manager) UpdateStackTags(ctx context.Context, org, project, stack strin
 }
 
 func (m *Manager) RenameStack(ctx context.Context, org, oldProject, oldName, newProject, newName string) error {
+	ctx, span := tracer.Start(ctx, "engine.RenameStack")
+	defer span.End()
 	m.cache.Remove(stackKey(org, oldProject, oldName))
 	m.secretsCache.Remove(stackKey(org, oldProject, oldName))
 	return m.store.RenameStack(ctx, org, oldProject, oldName, newProject, newName)
@@ -236,6 +255,9 @@ func (m *Manager) RenameStack(ctx context.Context, org, oldProject, oldName, new
 // --- State Export/Import ---
 
 func (m *Manager) ExportState(ctx context.Context, org, project, stack string, version *int) ([]byte, error) {
+	ctx, span := tracer.Start(ctx, "engine.ExportState",
+		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stack))))
+	defer span.End()
 	key := stackKey(org, project, stack)
 
 	// Check cache for current version.
@@ -290,6 +312,8 @@ func (m *Manager) ExportState(ctx context.Context, org, project, stack string, v
 // ExportStateCompressed returns raw deployment bytes, potentially still gzip-compressed.
 // Returns (data, isGzipCompressed, error). Used for zero-copy gzip export.
 func (m *Manager) ExportStateCompressed(ctx context.Context, org, project, stack string, version *int) ([]byte, bool, error) {
+	ctx, span := tracer.Start(ctx, "engine.ExportStateCompressed")
+	defer span.End()
 	key := stackKey(org, project, stack)
 
 	// Check cache for current version.
@@ -342,6 +366,9 @@ func (m *Manager) ExportStateCompressed(ctx context.Context, org, project, stack
 }
 
 func (m *Manager) ImportState(ctx context.Context, org, project, stack string, deployment []byte) error {
+	ctx, span := tracer.Start(ctx, "engine.ImportState",
+		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stack))))
+	defer span.End()
 	key := stackKey(org, project, stack)
 
 	st, err := m.store.GetStack(ctx, org, project, stack)
@@ -388,6 +415,9 @@ type CreateUpdateResult struct {
 }
 
 func (m *Manager) CreateUpdate(ctx context.Context, org, project, stack, kind string, config, metadata json.RawMessage) (*CreateUpdateResult, error) {
+	ctx, span := tracer.Start(ctx, "engine.CreateUpdate",
+		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stack)), attribute.String("kind", kind)))
+	defer span.End()
 	// Check for active updates on this stack.
 	active, err := m.store.GetActiveUpdate(ctx, org, project, stack)
 	if err != nil {
@@ -441,6 +471,9 @@ type StartUpdateResult struct {
 }
 
 func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[string]string, requestedJournalVersion int) (*StartUpdateResult, error) {
+	ctx, span := tracer.Start(ctx, "engine.StartUpdate",
+		trace.WithAttributes(attribute.String("update_id", updateID)))
+	defer span.End()
 	u, err := m.store.GetUpdate(ctx, updateID)
 	if err != nil {
 		return nil, err
@@ -504,6 +537,9 @@ func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[str
 }
 
 func (m *Manager) CompleteUpdate(ctx context.Context, updateID string, status string, result json.RawMessage) error {
+	ctx, span := tracer.Start(ctx, "engine.CompleteUpdate",
+		trace.WithAttributes(attribute.String("update_id", updateID), attribute.String("status", status)))
+	defer span.End()
 	// Flush any buffered events for this update before completing.
 	if err := m.flushEvents(ctx); err != nil {
 		slog.Warn("failed to flush events before completing update", "error", err)
@@ -634,6 +670,9 @@ func (m *Manager) requireInProgress(ctx context.Context, updateID string) (*stor
 }
 
 func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deployment []byte) error {
+	ctx, span := tracer.Start(ctx, "engine.SaveCheckpoint",
+		trace.WithAttributes(attribute.Int("bytes", len(deployment))))
+	defer span.End()
 	u, err := m.requireInProgress(ctx, updateID)
 	if err != nil {
 		return err
@@ -668,6 +707,9 @@ func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deploymen
 
 // SaveCheckpointDelta applies a text diff to the previous state to produce the new state.
 func (m *Manager) SaveCheckpointDelta(ctx context.Context, updateID string, expectedHash string, delta string, sequenceNumber int) error {
+	ctx, span := tracer.Start(ctx, "engine.SaveCheckpointDelta",
+		trace.WithAttributes(attribute.Int("delta_bytes", len(delta)), attribute.Int("sequence", sequenceNumber)))
+	defer span.End()
 	u, err := m.requireInProgress(ctx, updateID)
 	if err != nil {
 		return err
@@ -698,6 +740,9 @@ func (m *Manager) SaveCheckpointDelta(ctx context.Context, updateID string, expe
 // --- Journal Entries ---
 
 func (m *Manager) SaveJournalEntries(ctx context.Context, updateID string, entries []json.RawMessage) error {
+	ctx, span := tracer.Start(ctx, "engine.SaveJournalEntries",
+		trace.WithAttributes(attribute.Int("count", len(entries))))
+	defer span.End()
 	// Get the current max sequence for this update.
 	maxSeq, err := m.store.GetMaxJournalSequence(ctx, updateID)
 	if err != nil {
@@ -820,6 +865,8 @@ func (m *Manager) GetHistoryByVersion(ctx context.Context, org, project, stack s
 // --- Secrets ---
 
 func (m *Manager) EncryptValue(ctx context.Context, org, project, stack string, plaintext []byte) ([]byte, error) {
+	ctx, span := tracer.Start(ctx, "engine.EncryptValue")
+	defer span.End()
 	key, err := m.getOrCreateSecretsKey(ctx, org, project, stack)
 	if err != nil {
 		return nil, err
@@ -828,6 +875,8 @@ func (m *Manager) EncryptValue(ctx context.Context, org, project, stack string, 
 }
 
 func (m *Manager) DecryptValue(ctx context.Context, org, project, stack string, ciphertext []byte) ([]byte, error) {
+	ctx, span := tracer.Start(ctx, "engine.DecryptValue")
+	defer span.End()
 	key, err := m.getOrCreateSecretsKey(ctx, org, project, stack)
 	if err != nil {
 		return nil, err
@@ -919,6 +968,8 @@ func (m *Manager) ValidateUpdateToken(ctx context.Context, updateID, token strin
 
 // Backup creates a consistent database backup and uploads to configured remote providers.
 func (m *Manager) Backup(ctx context.Context) (*BackupResult, error) {
+	ctx, span := tracer.Start(ctx, "engine.Backup")
+	defer span.End()
 	if m.backupDir == "" && len(m.backupProviders) == 0 {
 		return nil, errors.New("no backup destination configured (use -backup-dir and/or -backup-s3-bucket)")
 	}

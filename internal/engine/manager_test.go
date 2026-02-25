@@ -60,39 +60,7 @@ func TestSaveCheckpointDelta(t *testing.T) {
 	ctx := context.Background()
 	updateID := "update-1"
 
-	// Initial state: {"foo":"bar"}
-	initialJSON := `{"foo":"bar"}`
-	// initialHash := sha256.Sum256([]byte(initialJSON))
-	// initialHashStr := hex.EncodeToString(initialHash[:])
-
-	// Mock GetUpdate
-	store.On("GetUpdate", ctx, updateID).Return(&storage.Update{
-		ID:          updateID,
-		OrgName:     "org",
-		ProjectName: "proj",
-		StackName:   "stack",
-		Version:     1,
-	}, nil)
-
-	// Mock GetCurrentState (Sequence 0 -> Version 1)
-	// Note: GetCurrentState returns *storage.StackState, which has Deployment []byte
-	store.On("GetCurrentState", ctx, "org", "proj", "stack").Return(&storage.StackState{
-		Version:    1,
-		Deployment: []byte(initialJSON),
-	}, nil)
-
-	// New state: {"foo":"baz"}
-	// Delta from bar -> baz
-	// We'll use a dummy delta since applyDelta logic is tested elsewhere,
-	// but Manager integration needs to be verified.
-
 	baseText := "abc"
-	// baseHash := sha256.Sum256([]byte(baseText))
-	// baseHashStr := hex.EncodeToString(baseHash[:])
-
-	// newText := "abcd"
-	// Delta: Append "d" at offset 3.
-	// applyDelta expects a JSON array of TextEdit.
 	delta := `[{"Span":{"start":{"offset":3,"line":1,"column":4},"end":{"offset":3,"line":1,"column":4}},"NewText":"d"}]`
 
 	// Calculate expected hash of the RESULT (abc + "d" = "abcd")
@@ -100,9 +68,8 @@ func TestSaveCheckpointDelta(t *testing.T) {
 	expectedHash := sha256.Sum256([]byte(expectedText))
 	expectedHashStr := hex.EncodeToString(expectedHash[:])
 
-	// Mock again with real text
-	store.ExpectedCalls = nil // Clear previous
-	store.On("GetUpdate", ctx, updateID).Return(&storage.Update{
+	// Use mock.Anything for context because OTel spans enrich it with trace values.
+	store.On("GetUpdate", mock.Anything, updateID).Return(&storage.Update{
 		ID:          updateID,
 		OrgName:     "org",
 		ProjectName: "proj",
@@ -110,13 +77,11 @@ func TestSaveCheckpointDelta(t *testing.T) {
 		Version:     1,
 		Status:      "in-progress",
 	}, nil)
-	store.On("GetCurrentState", ctx, "org", "proj", "stack").Return(&storage.StackState{
+	store.On("GetCurrentState", mock.Anything, "org", "proj", "stack").Return(&storage.StackState{
 		Version:    1,
 		Deployment: []byte(baseText),
 	}, nil)
-
-	// Expect SaveState with new content
-	store.On("SaveState", ctx, mock.MatchedBy(func(s *storage.StackState) bool {
+	store.On("SaveState", mock.Anything, mock.MatchedBy(func(s *storage.StackState) bool {
 		return s.Version == 1 && s.OrgName == "org"
 	})).Return(nil)
 
@@ -131,13 +96,13 @@ func TestSaveCheckpointDelta_HashMismatch(t *testing.T) {
 	mgr, _ := NewManager(store, nil)
 	ctx := context.Background()
 
-	// Mock GetUpdate
-	store.On("GetUpdate", ctx, "up-1").Return(&storage.Update{
+	// Use mock.Anything for context because OTel spans enrich it with trace values.
+	store.On("GetUpdate", mock.Anything, "up-1").Return(&storage.Update{
 		OrgName: "org", ProjectName: "proj", StackName: "stack", Version: 1, Status: "in-progress",
 	}, nil)
 
 	// Mock GetState containing "abc"
-	store.On("GetCurrentState", ctx, "org", "proj", "stack").Return(&storage.StackState{
+	store.On("GetCurrentState", mock.Anything, "org", "proj", "stack").Return(&storage.StackState{
 		Version:    1,
 		Deployment: []byte("abc"),
 	}, nil)
@@ -159,8 +124,8 @@ func TestExportState(t *testing.T) {
 	mgr, _ := NewManager(store, nil)
 	ctx := context.Background()
 
-	// 1. Uncompressed logic
-	store.On("GetCurrentStateRaw", ctx, "org", "proj", "stack-u").Return([]byte(`{"foo":"bar"}`), 1, false, nil)
+	// Use mock.Anything for context because OTel spans enrich it with trace values.
+	store.On("GetCurrentStateRaw", mock.Anything, "org", "proj", "stack-u").Return([]byte(`{"foo":"bar"}`), 1, false, nil)
 
 	data, err := mgr.ExportState(ctx, "org", "proj", "stack-u", nil)
 	require.NoError(t, err)

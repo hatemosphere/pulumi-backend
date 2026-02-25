@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	stdjson "encoding/json"
+
 	"github.com/hatemosphere/pulumi-backend/internal/api"
 	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/auth"
@@ -21,6 +23,14 @@ import (
 	"github.com/hatemosphere/pulumi-backend/internal/config"
 	"github.com/hatemosphere/pulumi-backend/internal/engine"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 func main() {
@@ -286,13 +296,67 @@ func main() {
 		slog.Info("RBAC enabled", "config", cfg.RBACConfigPath)
 	}
 
+	// Initialize OpenTelemetry tracing if configured.
+	var tp *sdktrace.TracerProvider
+	if cfg.OTelServiceName != "" {
+		var initErr error
+		tp, initErr = initTracer(context.Background(), cfg.OTelServiceName)
+		if initErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to initialize OpenTelemetry: %v\n", initErr)
+			os.Exit(1)
+		}
+		slog.Info("OpenTelemetry tracing enabled", "service", cfg.OTelServiceName)
+	}
+
+	// When management-addr is set, health/metrics move to a separate server.
+	if cfg.ManagementAddr != "" {
+		serverOpts = append(serverOpts, api.WithSkipManagementRoutes())
+	}
+
 	srv := api.NewServer(mgr, cfg.DefaultOrg, cfg.DefaultUser, serverOpts...)
-	router := srv.Router()
+
+	handler := srv.Router()
+	if tp != nil {
+		handler = otelhttp.NewHandler(handler, "pulumi-backend")
+	}
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           router,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	// Start separate management server for health probes and metrics.
+	var mgmtServer *http.Server
+	if cfg.ManagementAddr != "" {
+		mgmtMux := http.NewServeMux()
+		mgmtMux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = stdjson.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		})
+		mgmtMux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+			if err := mgr.Ping(r.Context()); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = stdjson.NewEncoder(w).Encode(map[string]string{"status": "error"})
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = stdjson.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		})
+		mgmtMux.Handle("GET /metrics", api.MetricsHandler())
+
+		mgmtServer = &http.Server{
+			Addr:              cfg.ManagementAddr,
+			Handler:           mgmtMux,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			slog.Info("management server starting", "addr", cfg.ManagementAddr)
+			if err := mgmtServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Error("management server error", "error", err)
+			}
+		}()
 	}
 
 	// Graceful shutdown on SIGINT/SIGTERM.
@@ -307,6 +371,11 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
+		if mgmtServer != nil {
+			if err := mgmtServer.Shutdown(ctx); err != nil {
+				slog.Error("management server shutdown error", "error", err)
+			}
+		}
 		if err := httpServer.Shutdown(ctx); err != nil {
 			slog.Error("http server shutdown error", "error", err)
 		}
@@ -329,9 +398,14 @@ func main() {
 	// Wait for shutdown to complete.
 	<-done
 
-	// Flush buffered events and stop background goroutine.
+	// Flush buffered events, shut down tracing, and close storage.
 	slog.Info("flushing events and closing storage")
 	mgr.Shutdown()
+	if tp != nil {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			slog.Error("tracer provider shutdown error", "error", err)
+		}
+	}
 	store.Close()
 	slog.Info("shutdown complete")
 }
@@ -460,6 +534,32 @@ func buildOldSecretsProvider(cfg *config.Config) (engine.SecretsProvider, error)
 	default:
 		return nil, fmt.Errorf("--old-secrets-provider must be 'local' or 'gcpkms', got %q", cfg.OldSecretsProvider)
 	}
+}
+
+// initTracer sets up an OTLP gRPC trace exporter and returns the TracerProvider.
+// Exporter endpoint is configured via standard OTEL_EXPORTER_OTLP_ENDPOINT env var
+// (default: localhost:4317).
+func initTracer(ctx context.Context, serviceName string) (*sdktrace.TracerProvider, error) {
+	exporter, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create OTLP exporter: %w", err)
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceNameKey.String(serviceName),
+		)),
+	)
+
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+
+	return tp, nil
 }
 
 // migrateSecretsKeys re-wraps all per-stack DEKs from oldProvider to newProvider.

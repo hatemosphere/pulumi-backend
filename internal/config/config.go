@@ -95,6 +95,12 @@ type Config struct {
 	// Profiling.
 	PprofEnabled bool // enable pprof endpoints at /debug/pprof/
 
+	// OpenTelemetry.
+	OTelServiceName string // OTLP service name (empty = tracing disabled)
+
+	// Management server (separate port for health probes and metrics).
+	ManagementAddr string // listen address for management endpoints (empty = serve on main port)
+
 	// Secrets key migration (re-wrap DEKs from old to new provider, then exit).
 	MigrateSecretsKey  bool   // --migrate-secrets-key
 	OldSecretsProvider string // --old-secrets-provider (local or gcpkms)
@@ -182,6 +188,12 @@ func Parse() *Config {
 
 	// Profiling flags.
 	fs.BoolVar(&c.PprofEnabled, "pprof", false, "enable pprof profiling endpoints at /debug/pprof/")
+
+	// OpenTelemetry flags.
+	fs.StringVar(&c.OTelServiceName, "otel-service-name", "", "OpenTelemetry service name (empty = tracing disabled, exporter configured via OTEL_EXPORTER_OTLP_ENDPOINT)")
+
+	// Management server flags.
+	fs.StringVar(&c.ManagementAddr, "management-addr", "", "separate listen address for /healthz, /readyz, /metrics (e.g., :9090; empty = serve on main port)")
 
 	// Secrets key migration flags.
 	fs.BoolVar(&c.MigrateSecretsKey, "migrate-secrets-key", false, "re-wrap all DEKs from old to new provider, then exit")

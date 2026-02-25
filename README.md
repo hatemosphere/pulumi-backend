@@ -60,6 +60,8 @@ All flags have corresponding environment variables with the `PULUMI_BACKEND_` pr
 | `-log-format` | `PULUMI_BACKEND_LOG_FORMAT` | `json` | Log format: `json` or `text` |
 | `-audit-logs` | `PULUMI_BACKEND_AUDIT_LOGS` | `true` | Enable structured audit logging |
 | `-pprof` | `PULUMI_BACKEND_PPROF` | `false` | Enable pprof profiling endpoints at `/debug/pprof/` |
+| `-management-addr` | `PULUMI_BACKEND_MANAGEMENT_ADDR` | (disabled) | Separate listen address for `/healthz`, `/readyz`, `/metrics` (e.g., `:9090`) |
+| `-otel-service-name` | `PULUMI_BACKEND_OTEL_SERVICE_NAME` | (disabled) | OpenTelemetry service name (enables OTLP tracing) |
 
 If no master key is provided, one is auto-generated and printed to stderr. **You must persist it** (e.g. `export PULUMI_BACKEND_MASTER_KEY=...`) — secrets will be undecryptable on restart with a different key.
 
@@ -173,7 +175,9 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 - Read-only teams and roles (`GET /api/orgs/{orgName}/teams`, `GET /api/orgs/{orgName}/roles`)
 - OIDC refresh token re-validation (detects deactivated users mid-session)
 - Structured audit logging (actor, action, resource, IP for all mutating operations)
-- Prometheus metrics (`/metrics`)
+- Health probes (`GET /healthz` liveness, `GET /readyz` readiness with DB ping) — optional separate management port
+- Prometheus metrics (`/metrics`) — HTTP, stack operations, update duration, checkpoint size histograms
+- OpenTelemetry tracing (HTTP spans via `otelhttp`, engine-level business operation spans, SQL query spans via `otelsql`)
 - OpenAPI 3.1 spec (`GET /api/openapi`)
 - Database backup (`POST /api/admin/backup`) with S3-compatible remote upload, scheduled backups, and retention management
 - Secrets key migration (`--migrate-secrets-key` for local key rotation and local↔KMS migration)

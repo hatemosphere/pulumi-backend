@@ -27,22 +27,23 @@ import (
 
 // Server is the HTTP API server.
 type Server struct {
-	engine           *engine.Manager
-	defaultOrg       string
-	defaultUser      string
-	deltaCutoffBytes int
-	historyPageSize  int
-	humaAPI          huma.API
-	authMode         string                 // "single-tenant" (default), "google", "oidc", or "jwt"
-	tokenStore       storage.Store          // required in google/oidc auth modes
-	oidcAuth         auth.OIDCAuthenticator // required in google/oidc auth modes
-	groupsCache      *auth.GroupsCache      // optional: resolves groups via external API (e.g. Google Admin SDK)
-	jwtAuth          *auth.JWTAuthenticator // required in jwt auth mode
-	rbac             *auth.RBACResolver     // nil = no RBAC enforcement
-	pprofEnabled     bool                   // enable /debug/pprof/ endpoints
-	publicURL        string                 // public base URL for redirect URIs (mitigates Host header poisoning)
-	cliSessionNonces *nonceStore            // server-side CLI session nonce store
-	trustedProxies   []*net.IPNet           // CIDRs allowed to set forwarded headers (nil = trust all)
+	engine               *engine.Manager
+	defaultOrg           string
+	defaultUser          string
+	deltaCutoffBytes     int
+	historyPageSize      int
+	humaAPI              huma.API
+	authMode             string                 // "single-tenant" (default), "google", "oidc", or "jwt"
+	tokenStore           storage.Store          // required in google/oidc auth modes
+	oidcAuth             auth.OIDCAuthenticator // required in google/oidc auth modes
+	groupsCache          *auth.GroupsCache      // optional: resolves groups via external API (e.g. Google Admin SDK)
+	jwtAuth              *auth.JWTAuthenticator // required in jwt auth mode
+	rbac                 *auth.RBACResolver     // nil = no RBAC enforcement
+	pprofEnabled         bool                   // enable /debug/pprof/ endpoints
+	publicURL            string                 // public base URL for redirect URIs (mitigates Host header poisoning)
+	skipManagementRoutes bool                   // skip /healthz, /readyz, /metrics on main mux (served on management port)
+	cliSessionNonces     *nonceStore            // server-side CLI session nonce store
+	trustedProxies       []*net.IPNet           // CIDRs allowed to set forwarded headers (nil = trust all)
 }
 
 // NewServer creates a new API server.
@@ -112,6 +113,12 @@ func WithPprof() ServerOption {
 // WithPublicURL sets the public base URL for redirect URI construction.
 func WithPublicURL(url string) ServerOption {
 	return func(s *Server) { s.publicURL = strings.TrimRight(url, "/") }
+}
+
+// WithSkipManagementRoutes tells the server not to register /healthz, /readyz,
+// /metrics on the main mux (they will be served on a separate management port).
+func WithSkipManagementRoutes() ServerOption {
+	return func(s *Server) { s.skipManagementRoutes = true }
 }
 
 // WithTrustedProxies sets the CIDR ranges of trusted reverse proxies.
@@ -251,7 +258,7 @@ func (s *Server) Router() http.Handler {
 
 // registerPublicRoutes registers unauthenticated huma operations.
 func (s *Server) registerPublicRoutes(api huma.API) {
-	// Health check.
+	// Health check (backward-compatible root endpoint).
 	huma.Register(api, huma.Operation{
 		OperationID: "healthCheck",
 		Method:      http.MethodGet,
@@ -263,26 +270,56 @@ func (s *Server) registerPublicRoutes(api huma.API) {
 		return out, nil
 	})
 
-	// Prometheus metrics.
-	huma.Register(api, huma.Operation{
-		OperationID: "getMetrics",
-		Method:      http.MethodGet,
-		Path:        "/metrics",
-		Tags:        []string{"Meta"},
-	}, func(ctx context.Context, input *struct{}) (*huma.StreamResponse, error) {
-		return &huma.StreamResponse{
-			Body: func(ctx huma.Context) {
-				rec := httptest.NewRecorder()
-				MetricsHandler().ServeHTTP(rec, &http.Request{})
-				for k, vals := range rec.Header() {
-					for _, v := range vals {
-						ctx.SetHeader(k, v)
+	if !s.skipManagementRoutes {
+		// Liveness probe — returns 200 if the process is running.
+		huma.Register(api, huma.Operation{
+			OperationID: "livenessCheck",
+			Method:      http.MethodGet,
+			Path:        "/healthz",
+			Tags:        []string{"Health"},
+		}, func(ctx context.Context, input *struct{}) (*HealthCheckOutput, error) {
+			out := &HealthCheckOutput{}
+			out.Body.Status = "ok"
+			return out, nil
+		})
+
+		// Readiness probe — returns 200 if the backend can serve requests (DB reachable).
+		huma.Register(api, huma.Operation{
+			OperationID: "readinessCheck",
+			Method:      http.MethodGet,
+			Path:        "/readyz",
+			Tags:        []string{"Health"},
+			Errors:      []int{503},
+		}, func(ctx context.Context, input *struct{}) (*HealthCheckOutput, error) {
+			if err := s.engine.Ping(ctx); err != nil {
+				return nil, huma.NewError(http.StatusServiceUnavailable, "service not ready")
+			}
+			out := &HealthCheckOutput{}
+			out.Body.Status = "ok"
+			return out, nil
+		})
+
+		// Prometheus metrics.
+		huma.Register(api, huma.Operation{
+			OperationID: "getMetrics",
+			Method:      http.MethodGet,
+			Path:        "/metrics",
+			Tags:        []string{"Meta"},
+		}, func(ctx context.Context, input *struct{}) (*huma.StreamResponse, error) {
+			return &huma.StreamResponse{
+				Body: func(ctx huma.Context) {
+					rec := httptest.NewRecorder()
+					MetricsHandler().ServeHTTP(rec, &http.Request{})
+					for k, vals := range rec.Header() {
+						for _, v := range vals {
+							ctx.SetHeader(k, v)
+						}
 					}
-				}
-				_, _ = ctx.BodyWriter().Write(rec.Body.Bytes())
-			},
-		}, nil
-	})
+					_, _ = ctx.BodyWriter().Write(rec.Body.Bytes())
+				},
+			}, nil
+		})
+	}
 
 	// OIDC token exchange (active in google/oidc auth modes).
 	if s.oidcAuth != nil {

@@ -96,6 +96,44 @@ func TestHealthCheckJSON(t *testing.T) {
 	}
 }
 
+func TestLivenessProbe(t *testing.T) {
+	tb := startBackend(t)
+
+	req, _ := http.NewRequest("GET", tb.URL+"/healthz", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	var body map[string]string
+	httpJSON(t, resp, &body)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("expected status=ok, got %v", body["status"])
+	}
+}
+
+func TestReadinessProbe(t *testing.T) {
+	tb := startBackend(t)
+
+	req, _ := http.NewRequest("GET", tb.URL+"/readyz", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	var body map[string]string
+	httpJSON(t, resp, &body)
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("expected status=ok, got %v", body["status"])
+	}
+}
+
 // ===== Capabilities =====
 
 func TestCapabilitiesResponse(t *testing.T) {
