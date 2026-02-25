@@ -20,7 +20,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/oauth2 v0.35.0
 	golang.org/x/sync v0.19.0
-	google.golang.org/api v0.268.0
+	google.golang.org/api v0.269.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.46.1
 )
