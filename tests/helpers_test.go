@@ -46,9 +46,7 @@ type backendConfig struct {
 func startBackendWithConfig(t *testing.T, cfg backendConfig) *testBackend {
 	t.Helper()
 
-	// Suppress audit logs in tests (re-enabled in tests that exercise auditing).
-	audit.Enabled = false
-	t.Cleanup(func() { audit.Enabled = true })
+	disableAuditForTest(t)
 
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "test.db")
@@ -90,20 +88,12 @@ func startBackendWithConfig(t *testing.T, cfg backendConfig) *testBackend {
 		dbPath:  dbPath,
 	}
 
-	// Wait for server to be ready.
-	for i := 0; i < 50; i++ {
-		resp, err := http.Get(tb.URL + "/")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
 	t.Cleanup(func() {
 		_ = httpServer.Close()
 		_ = store.Close()
 	})
+
+	waitForBackend(t, tb.URL)
 	return tb
 }
 
@@ -112,8 +102,7 @@ func startBackendWithConfig(t *testing.T, cfg backendConfig) *testBackend {
 func startBackendWithDB(t *testing.T, dbPath string, masterKey []byte) *testBackend {
 	t.Helper()
 
-	audit.Enabled = false
-	t.Cleanup(func() { audit.Enabled = true })
+	disableAuditForTest(t)
 
 	store, err := storage.NewSQLiteStore(dbPath, storage.SQLiteStoreConfig{})
 	if err != nil {
@@ -151,20 +140,34 @@ func startBackendWithDB(t *testing.T, dbPath string, masterKey []byte) *testBack
 		dbPath:  dbPath,
 	}
 
-	for i := 0; i < 50; i++ {
-		resp, err := http.Get(tb.URL + "/")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
 	t.Cleanup(func() {
 		_ = httpServer.Close()
 		_ = store.Close()
 	})
+
+	waitForBackend(t, tb.URL)
 	return tb
+}
+
+// disableAuditForTest suppresses audit logging for the duration of a test.
+func disableAuditForTest(t testing.TB) {
+	t.Helper()
+	audit.Enabled = false
+	t.Cleanup(func() { audit.Enabled = true })
+}
+
+// waitForBackend polls the backend health endpoint until it responds or the timeout expires.
+func waitForBackend(t testing.TB, baseURL string) {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		resp, err := http.Get(baseURL + "/")
+		if err == nil {
+			resp.Body.Close()
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("backend did not become ready")
 }
 
 // --- CLI helpers ---

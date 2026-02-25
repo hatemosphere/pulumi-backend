@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/hatemosphere/pulumi-backend/internal/gziputil"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
@@ -113,7 +114,7 @@ func (m *Manager) replayAndSaveJournal(ctx context.Context, u *storage.Update) (
 	resourceCount := storage.CountResources(resultJSON)
 
 	// Compress before saving to cache and store.
-	compressed, err := compress(resultJSON)
+	compressed, err := gziputil.Compress(resultJSON)
 	if err != nil {
 		return nil, fmt.Errorf("compress journal result: %w", err)
 	}
@@ -337,10 +338,8 @@ func replayJournalEntries(base checkpoint, entries []journalEntry) (checkpoint, 
 // rebuildDependencies prunes dangling dependency references from resources.
 // This is necessary after refresh operations which may delete resources.
 func rebuildDependencies(resources []json.RawMessage) {
-	// Collect all URNs present in the final resource set.
 	urnSet := make(map[string]bool, len(resources))
 	for _, r := range resources {
-		// Optimization: Use a minimal struct for fast URN extraction.
 		var res struct {
 			URN string `json:"urn"`
 		}
@@ -349,111 +348,55 @@ func rebuildDependencies(resources []json.RawMessage) {
 		}
 	}
 
-	// Prune dangling references.
 	for i, r := range resources {
-		// Optimization: Use a struct pre-check to validate dependencies without full parsing.
-		// If all dependencies are valid, we can skip the heavy map parsing entirely.
-		var candidate struct {
-			Dependencies         []string            `json:"dependencies"`
-			Parent               string              `json:"parent"`
-			PropertyDependencies map[string][]string `json:"propertyDependencies"`
-		}
-
-		// If unmarshal fails, we can't optimize, so proceed to full parsing.
-		// Use a lightweight unmarshal that ignores other fields.
-		if json.Unmarshal(r, &candidate) == nil {
-			allValid := true
-
-			// Check dependencies.
-			for _, d := range candidate.Dependencies {
-				if !urnSet[d] {
-					allValid = false
-					break
-				}
-			}
-
-			// Check parent.
-			if allValid && candidate.Parent != "" && !urnSet[candidate.Parent] {
-				allValid = false
-			}
-
-			// Check propertyDependencies.
-			if allValid {
-				for _, deps := range candidate.PropertyDependencies {
-					for _, d := range deps {
-						if !urnSet[d] {
-							allValid = false
-							break
-						}
-					}
-					if !allValid {
-						break
-					}
-				}
-			}
-
-			// If everything is valid, we don't need to prune anything.
-			if allValid {
-				continue
-			}
-		}
-
-		// Fallback: Unmarshal into map for modification.
-		var res map[string]json.RawMessage
+		var res map[string]any
 		if json.Unmarshal(r, &res) != nil {
 			continue
 		}
 		changed := false
 
-		// Prune dependencies.
-		if depsRaw, ok := res["dependencies"]; ok {
-			var deps []string
-			if json.Unmarshal(depsRaw, &deps) == nil {
-				filtered := make([]string, 0, len(deps))
-				for _, d := range deps {
-					if urnSet[d] {
-						filtered = append(filtered, d)
-					}
-				}
-				if len(filtered) != len(deps) {
-					newDeps, _ := json.Marshal(filtered)
-					res["dependencies"] = newDeps
-					changed = true
+		if deps, ok := res["dependencies"].([]any); ok {
+			filtered := make([]any, 0, len(deps))
+			for _, d := range deps {
+				if s, ok := d.(string); ok && urnSet[s] {
+					filtered = append(filtered, d)
 				}
 			}
-		}
-
-		// Prune parent if dangling.
-		if parentRaw, ok := res["parent"]; ok {
-			var parent string
-			if json.Unmarshal(parentRaw, &parent) == nil && parent != "" && !urnSet[parent] {
-				delete(res, "parent")
+			if len(filtered) != len(deps) {
+				res["dependencies"] = filtered
 				changed = true
 			}
 		}
 
-		// Prune propertyDependencies.
-		if pdRaw, ok := res["propertyDependencies"]; ok {
-			var pd map[string][]string
-			if json.Unmarshal(pdRaw, &pd) == nil {
-				pdChanged := false
-				for key, deps := range pd {
-					filtered := make([]string, 0, len(deps))
-					for _, d := range deps {
-						if urnSet[d] {
-							filtered = append(filtered, d)
-						}
-					}
-					if len(filtered) != len(deps) {
-						pd[key] = filtered
-						pdChanged = true
+		if parent, ok := res["parent"].(string); ok && parent != "" && !urnSet[parent] {
+			delete(res, "parent")
+			changed = true
+		}
+
+		if pd, ok := res["propertyDependencies"].(map[string]any); ok {
+			for key, val := range pd {
+				deps, ok := val.([]any)
+				if !ok {
+					continue
+				}
+				filtered := make([]any, 0, len(deps))
+				for _, d := range deps {
+					if s, ok := d.(string); ok && urnSet[s] {
+						filtered = append(filtered, d)
 					}
 				}
-				if pdChanged {
-					newPD, _ := json.Marshal(pd)
-					res["propertyDependencies"] = newPD
+				if len(filtered) != len(deps) {
+					if len(filtered) == 0 {
+						delete(pd, key)
+					} else {
+						pd[key] = filtered
+					}
 					changed = true
 				}
+			}
+			if len(pd) == 0 {
+				delete(res, "propertyDependencies")
+				changed = true
 			}
 		}
 

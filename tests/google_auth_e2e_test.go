@@ -139,14 +139,7 @@ func TestGoogleAuthE2E(t *testing.T) {
 		store.Close()
 	})
 
-	// Wait for server to be ready.
-	for range 50 {
-		if resp, err := http.Get(baseURL + "/"); err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	waitForBackend(t, baseURL)
 	t.Logf("Backend running at %s", baseURL)
 
 	// --- Step 1: Get Google ID token via OAuth2 flow ---

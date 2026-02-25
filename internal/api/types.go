@@ -36,37 +36,12 @@ type Capability struct {
 	Configuration json.RawMessage `json:"configuration,omitempty"`
 }
 
-// ConfigValue represents a single config key entry in an update request.
-type ConfigValue struct {
-	String string `json:"string"`
-	Secret bool   `json:"secret"`
-	Object bool   `json:"object,omitempty"`
-}
-
-// UpdateMetadata describes metadata sent with an update request.
-type UpdateMetadata struct {
-	Message     string            `json:"message,omitempty"`
-	Environment map[string]string `json:"environment,omitempty"`
-}
-
 // StackConfig describes stack-level secrets/encryption configuration.
 type StackConfig struct {
 	Environment     string `json:"environment,omitempty"`
 	SecretsProvider string `json:"secretsProvider,omitempty"`
 	EncryptedKey    string `json:"encryptedKey,omitempty"`
 	EncryptionSalt  string `json:"encryptionSalt,omitempty"`
-}
-
-// UpdateOptions describes options for an update request.
-type UpdateOptions struct {
-	AutoApprove          bool   `json:"autoApprove,omitempty"`
-	Color                string `json:"color,omitempty"`
-	DryRun               bool   `json:"dryRun,omitempty"`
-	Parallel             int    `json:"parallel,omitempty"`
-	ShowConfig           bool   `json:"showConfig,omitempty"`
-	ShowReplacementSteps bool   `json:"showReplacementSteps,omitempty"`
-	ShowSames            bool   `json:"showSames,omitempty"`
-	ShowReads            bool   `json:"showReads,omitempty"`
 }
 
 // UntypedDeployment represents an untyped deployment object.
@@ -327,15 +302,14 @@ type BatchDecryptOutput struct {
 
 type CreateUpdateInput struct {
 	StackParams
-	RawBody []byte
-	Body    struct {
-		Name        string                 `json:"name,omitempty"`
-		Description string                 `json:"description,omitempty"`
-		Main        string                 `json:"main,omitempty"`
-		Runtime     string                 `json:"runtime,omitempty"`
-		Options     *UpdateOptions         `json:"options,omitempty"`
-		Config      map[string]ConfigValue `json:"config,omitempty"`
-		Metadata    *UpdateMetadata        `json:"metadata,omitempty"`
+	Body struct {
+		Name        string          `json:"name,omitempty"`
+		Description string          `json:"description,omitempty"`
+		Main        string          `json:"main,omitempty"`
+		Runtime     string          `json:"runtime,omitempty"`
+		Options     json.RawMessage `json:"options,omitempty"`
+		Config      json.RawMessage `json:"config,omitempty"`
+		Metadata    json.RawMessage `json:"metadata,omitempty"`
 	}
 }
 
@@ -438,7 +412,9 @@ type PatchCheckpointDeltaInput struct {
 
 type SaveJournalEntriesInput struct {
 	UpdateParams
-	RawBody []byte
+	Body struct {
+		Entries []json.RawMessage `json:"entries"`
+	}
 }
 
 // --- Engine Events ---

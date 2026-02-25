@@ -72,16 +72,7 @@ func (s *Server) registerUpdates(api huma.API) {
 			MaxBodyBytes: 1 << 20, // 1MB
 			Errors:       []int{409},
 		}, func(ctx context.Context, input *CreateUpdateInput) (*CreateUpdateOutput, error) {
-			// Extract config/metadata from raw body to preserve all fields
-			// (the typed Body is used only for OpenAPI schema generation).
-			var raw struct {
-				Config   json.RawMessage `json:"config"`
-				Metadata json.RawMessage `json:"metadata"`
-			}
-			if err := json.Unmarshal(input.RawBody, &raw); err != nil {
-				slog.Warn("failed to extract config/metadata from request body", "error", err)
-			}
-			result, err := s.engine.CreateUpdate(ctx, input.OrgName, input.ProjectName, input.StackName, kind, raw.Config, raw.Metadata)
+			result, err := s.engine.CreateUpdate(ctx, input.OrgName, input.ProjectName, input.StackName, kind, input.Body.Config, input.Body.Metadata)
 			if err != nil {
 				return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
 			}
@@ -263,14 +254,7 @@ func (s *Server) registerUpdates(api huma.API) {
 		DefaultStatus: 200,
 		Errors:        []int{400},
 	}, func(ctx context.Context, input *SaveJournalEntriesInput) (*struct{}, error) {
-		var req struct {
-			Entries []json.RawMessage `json:"entries"`
-		}
-		if err := json.Unmarshal(input.RawBody, &req); err != nil {
-			return nil, huma.NewError(http.StatusBadRequest, err.Error())
-		}
-
-		err := s.engine.SaveJournalEntries(ctx, input.UpdateID, req.Entries)
+		err := s.engine.SaveJournalEntries(ctx, input.UpdateID, input.Body.Entries)
 		if err != nil {
 			return nil, internalError(err)
 		}
@@ -360,6 +344,14 @@ func (s *Server) registerUpdates(api huma.API) {
 
 // --- History ---
 
+func (s *Server) buildRequestedBy() RequestedBy {
+	return RequestedBy{
+		Name:        s.defaultUser,
+		GitHubLogin: s.defaultUser,
+		AvatarURL:   "",
+	}
+}
+
 // historyToUpdateInfo converts a storage.UpdateHistory to an UpdateInfo.
 func historyToUpdateInfo(h *storage.UpdateHistory) UpdateInfo {
 	info := UpdateInfo{
@@ -447,11 +439,7 @@ func (s *Server) registerHistory(api huma.API) {
 		out.Body.UpdateID = h.UpdateID
 		out.Body.Version = h.Version
 		out.Body.LatestVersion = h.Version
-		out.Body.RequestedBy = RequestedBy{
-			Name:        s.defaultUser,
-			GitHubLogin: s.defaultUser,
-			AvatarURL:   "",
-		}
+		out.Body.RequestedBy = s.buildRequestedBy()
 		return out, nil
 	})
 
@@ -475,11 +463,7 @@ func (s *Server) registerHistory(api huma.API) {
 		out.Body.UpdateID = h.UpdateID
 		out.Body.Version = h.Version
 		out.Body.LatestVersion = h.Version
-		out.Body.RequestedBy = RequestedBy{
-			Name:        s.defaultUser,
-			GitHubLogin: s.defaultUser,
-			AvatarURL:   "",
-		}
+		out.Body.RequestedBy = s.buildRequestedBy()
 		return out, nil
 	})
 }

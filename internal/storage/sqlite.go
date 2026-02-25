@@ -1,29 +1,33 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/klauspost/compress/gzip"
+	"github.com/hatemosphere/pulumi-backend/internal/gziputil"
 	_ "modernc.org/sqlite"
 )
 
-// Pooled gzip writer and buffer to avoid allocating ~800KB per SaveState.
-var gzipWriterPool = sync.Pool{
-	New: func() any { return gzip.NewWriter(nil) },
+func unixToTimePtr(v *int64) *time.Time {
+	if v == nil {
+		return nil
+	}
+	t := time.Unix(*v, 0)
+	return &t
 }
 
-var bufPool = sync.Pool{
-	New: func() any { return new(bytes.Buffer) },
+func nullUnixToTimePtr(v sql.NullInt64) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	t := time.Unix(v.Int64, 0)
+	return &t
 }
 
 const defaultMaxStateVersions = 50
@@ -422,7 +426,7 @@ func (s *SQLiteStore) RenameStack(ctx context.Context, org, oldProject, oldName,
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return fmt.Errorf("stack %s/%s/%s already exists", org, newProject, newName)
 		}
-		return err
+		return fmt.Errorf("rename stack: %w", err)
 	}
 
 	// Cascade to related tables.
@@ -470,40 +474,6 @@ func (s *SQLiteStore) GetCurrentState(ctx context.Context, org, project, stack s
 	return s.GetStateVersion(ctx, org, project, stack, version)
 }
 
-// maybeDecompress handles transparent decompression if the data starts with gzip magic bytes.
-func maybeDecompress(data []byte) ([]byte, error) {
-	if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
-		gr, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil, err
-		}
-		defer gr.Close()
-
-		limit := int64(512 * 1024 * 1024) // 512 MB limit to prevent decompression bombs
-		limitReader := io.LimitReader(gr, limit+1)
-
-		buf := bufPool.Get().(*bytes.Buffer)
-		buf.Reset()
-		buf.Grow(len(data) * 4) // estimate ~4x expansion
-
-		_, err = io.Copy(buf, limitReader)
-		if err != nil {
-			bufPool.Put(buf)
-			return nil, err
-		}
-		if int64(buf.Len()) > limit {
-			bufPool.Put(buf)
-			return nil, errors.New("decompressed deployment exceeds maximum size of 512MB")
-		}
-
-		result := make([]byte, buf.Len())
-		copy(result, buf.Bytes())
-		bufPool.Put(buf)
-		return result, nil
-	}
-	return data, nil
-}
-
 func (s *SQLiteStore) GetStateVersion(ctx context.Context, org, project, stack string, version int) (*StackState, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT org_name, project_name, stack_name, version, deployment, deployment_hash, created_at
@@ -521,7 +491,7 @@ func (s *SQLiteStore) GetStateVersion(ctx context.Context, org, project, stack s
 	}
 
 	// Transparently decompress if needed.
-	st.Deployment, err = maybeDecompress(st.Deployment)
+	st.Deployment, err = gziputil.MaybeDecompress(st.Deployment)
 	if err != nil {
 		return nil, fmt.Errorf("decompress deployment: %w", err)
 	}
@@ -542,7 +512,7 @@ func (s *SQLiteStore) GetStateVersionRaw(ctx context.Context, org, project, stac
 	if err != nil {
 		return nil, false, err
 	}
-	isCompressed := len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b
+	isCompressed := gziputil.IsGzipped(data)
 	return data, isCompressed, nil
 }
 
@@ -575,38 +545,16 @@ func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
 
-	// Check if already compressed (magic bytes: 0x1f 0x8b).
+	// Check if already compressed.
 	var compressedDeployment []byte
-	if len(state.Deployment) > 2 && state.Deployment[0] == 0x1f && state.Deployment[1] == 0x8b {
+	if gziputil.IsGzipped(state.Deployment) {
 		compressedDeployment = state.Deployment
 	} else {
-		// GZIP compress the deployment using pooled writer.
-		buf := bufPool.Get().(*bytes.Buffer)
-		buf.Reset()
-		buf.Grow(len(state.Deployment) / 4)
-
-		gw := gzipWriterPool.Get().(*gzip.Writer)
-		gw.Reset(buf)
-
-		if _, err := gw.Write(state.Deployment); err != nil {
-			gw.Reset(nil)
-			gzipWriterPool.Put(gw)
-			bufPool.Put(buf)
-			return fmt.Errorf("compress deployment: %w", err)
+		var compErr error
+		compressedDeployment, compErr = gziputil.Compress(state.Deployment)
+		if compErr != nil {
+			return fmt.Errorf("compress deployment: %w", compErr)
 		}
-		if err := gw.Close(); err != nil {
-			gw.Reset(nil)
-			gzipWriterPool.Put(gw)
-			bufPool.Put(buf)
-			return fmt.Errorf("close gzip writer: %w", err)
-		}
-
-		compressedDeployment = make([]byte, buf.Len())
-		copy(compressedDeployment, buf.Bytes())
-
-		gw.Reset(nil)
-		gzipWriterPool.Put(gw)
-		bufPool.Put(buf)
 	}
 
 	_, err = tx.ExecContext(ctx,
@@ -697,14 +645,8 @@ func (s *SQLiteStore) GetUpdate(ctx context.Context, id string) (*Update, error)
 	}
 
 	u.CreatedAt = time.Unix(createdAt, 0)
-	if start.Valid {
-		ts := time.Unix(start.Int64, 0)
-		u.StartedAt = &ts
-	}
-	if end.Valid {
-		ts := time.Unix(end.Int64, 0)
-		u.CompletedAt = &ts
-	}
+	u.StartedAt = nullUnixToTimePtr(start)
+	u.CompletedAt = nullUnixToTimePtr(end)
 	if expires > 0 {
 		u.TokenExpiresAt = time.Unix(expires, 0)
 	}
@@ -898,10 +840,7 @@ func (s *SQLiteStore) GetUpdateHistory(ctx context.Context, org, project, stack 
 			return nil, err
 		}
 		h.StartTime = time.Unix(startTime, 0)
-		if endTime != nil {
-			t := time.Unix(*endTime, 0)
-			h.EndTime = &t
-		}
+		h.EndTime = unixToTimePtr(endTime)
 		history = append(history, h)
 	}
 	return history, nil
@@ -925,10 +864,7 @@ func (s *SQLiteStore) GetUpdateHistoryByVersion(ctx context.Context, org, projec
 		return nil, err
 	}
 	h.StartTime = time.Unix(startTime, 0)
-	if endTime != nil {
-		t := time.Unix(*endTime, 0)
-		h.EndTime = &t
-	}
+	h.EndTime = unixToTimePtr(endTime)
 	return &h, nil
 }
 
@@ -951,35 +887,40 @@ func (s *SQLiteStore) CreateToken(ctx context.Context, t *Token) error {
 	return err
 }
 
+// scanToken scans a token row into a Token struct from any scanner (row or rows).
+func scanToken(scan func(dest ...any) error) (Token, error) {
+	var t Token
+	var createdAt int64
+	var lastUsedAt, expiresAt *int64
+	var groupsJSON string
+	err := scan(&t.TokenHash, &t.UserName, &t.Description, &t.RefreshToken, &groupsJSON, &createdAt, &lastUsedAt, &expiresAt)
+	if err != nil {
+		return Token{}, err
+	}
+	if groupsJSON != "" {
+		if err := json.Unmarshal([]byte(groupsJSON), &t.Groups); err != nil {
+			slog.Warn("failed to unmarshal token groups", "user", t.UserName, "error", err)
+		}
+	}
+	t.CreatedAt = time.Unix(createdAt, 0)
+	t.LastUsedAt = unixToTimePtr(lastUsedAt)
+	t.ExpiresAt = unixToTimePtr(expiresAt)
+	return t, nil
+}
+
 func (s *SQLiteStore) GetToken(ctx context.Context, tokenHash string) (*Token, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT token_hash, user_name, description, refresh_token, groups, created_at, last_used_at, expires_at FROM tokens WHERE token_hash=?`,
 		tokenHash)
 
-	t := &Token{}
-	var createdAt int64
-	var lastUsedAt, expiresAt *int64
-	var groupsJSON string
-	err := row.Scan(&t.TokenHash, &t.UserName, &t.Description, &t.RefreshToken, &groupsJSON, &createdAt, &lastUsedAt, &expiresAt)
+	t, err := scanToken(row.Scan)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if groupsJSON != "" {
-		_ = json.Unmarshal([]byte(groupsJSON), &t.Groups)
-	}
-	t.CreatedAt = time.Unix(createdAt, 0)
-	if lastUsedAt != nil {
-		lu := time.Unix(*lastUsedAt, 0)
-		t.LastUsedAt = &lu
-	}
-	if expiresAt != nil {
-		ea := time.Unix(*expiresAt, 0)
-		t.ExpiresAt = &ea
-	}
-	return t, nil
+	return &t, nil
 }
 
 func (s *SQLiteStore) TouchToken(ctx context.Context, tokenHash string) error {
@@ -1015,24 +956,9 @@ func (s *SQLiteStore) ListTokensByUser(ctx context.Context, userName string) ([]
 
 	var tokens []Token
 	for rows.Next() {
-		var t Token
-		var createdAt int64
-		var lastUsedAt, expiresAt *int64
-		var groupsJSON string
-		if err := rows.Scan(&t.TokenHash, &t.UserName, &t.Description, &t.RefreshToken, &groupsJSON, &createdAt, &lastUsedAt, &expiresAt); err != nil {
+		t, err := scanToken(rows.Scan)
+		if err != nil {
 			return nil, err
-		}
-		if groupsJSON != "" {
-			_ = json.Unmarshal([]byte(groupsJSON), &t.Groups)
-		}
-		t.CreatedAt = time.Unix(createdAt, 0)
-		if lastUsedAt != nil {
-			lu := time.Unix(*lastUsedAt, 0)
-			t.LastUsedAt = &lu
-		}
-		if expiresAt != nil {
-			ea := time.Unix(*expiresAt, 0)
-			t.ExpiresAt = &ea
 		}
 		tokens = append(tokens, t)
 	}

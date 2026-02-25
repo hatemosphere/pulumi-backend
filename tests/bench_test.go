@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/hatemosphere/pulumi-backend/internal/api"
-	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/engine"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
@@ -68,8 +67,7 @@ func generateDeployment(resourceCount int) []byte {
 func benchBackend(b *testing.B) *testBackend {
 	b.Helper()
 
-	audit.Enabled = false
-	b.Cleanup(func() { audit.Enabled = true })
+	disableAuditForTest(b)
 
 	dataDir := b.TempDir()
 	dbPath := filepath.Join(dataDir, "bench.db")
@@ -111,21 +109,13 @@ func benchBackend(b *testing.B) *testBackend {
 		dbPath:  dbPath,
 	}
 
-	// Wait for server ready.
-	for i := 0; i < 50; i++ {
-		resp, err := http.Get(tb.URL + "/")
-		if err == nil {
-			resp.Body.Close()
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
 	b.Cleanup(func() {
 		_ = httpServer.Close()
 		mgr.Shutdown()
 		_ = store.Close()
 	})
+
+	waitForBackend(b, tb.URL)
 	return tb
 }
 
@@ -358,8 +348,7 @@ func BenchmarkListStacks(b *testing.B) {
 func BenchmarkEngineCompression(b *testing.B) {
 	for _, resourceCount := range []int{10, 100, 1000} {
 		b.Run(fmt.Sprintf("resources=%d", resourceCount), func(b *testing.B) {
-			audit.Enabled = false
-			b.Cleanup(func() { audit.Enabled = true })
+			disableAuditForTest(b)
 
 			dataDir := b.TempDir()
 			dbPath := filepath.Join(dataDir, "bench.db")
@@ -390,8 +379,7 @@ func BenchmarkEngineCompression(b *testing.B) {
 func BenchmarkEngineExport(b *testing.B) {
 	for _, resourceCount := range []int{10, 100, 1000} {
 		b.Run(fmt.Sprintf("resources=%d", resourceCount), func(b *testing.B) {
-			audit.Enabled = false
-			b.Cleanup(func() { audit.Enabled = true })
+			disableAuditForTest(b)
 
 			dataDir := b.TempDir()
 			dbPath := filepath.Join(dataDir, "bench.db")
@@ -444,8 +432,7 @@ func BenchmarkSHA256(b *testing.B) {
 
 // BenchmarkUpdateLifecycle measures the full update lifecycle (create, start, checkpoint, complete).
 func BenchmarkUpdateLifecycle(b *testing.B) {
-	audit.Enabled = false
-	b.Cleanup(func() { audit.Enabled = true })
+	disableAuditForTest(b)
 
 	dataDir := b.TempDir()
 	dbPath := filepath.Join(dataDir, "bench.db")
@@ -486,8 +473,7 @@ func BenchmarkUpdateLifecycle(b *testing.B) {
 
 // BenchmarkSecretsEngine benchmarks encrypt/decrypt directly.
 func BenchmarkSecretsEngine(b *testing.B) {
-	audit.Enabled = false
-	b.Cleanup(func() { audit.Enabled = true })
+	disableAuditForTest(b)
 
 	dataDir := b.TempDir()
 	dbPath := filepath.Join(dataDir, "bench.db")
@@ -530,8 +516,7 @@ func BenchmarkSecretsEngine(b *testing.B) {
 func BenchmarkJournalSave(b *testing.B) {
 	for _, batchSize := range []int{1, 10, 50} {
 		b.Run(fmt.Sprintf("batch=%d", batchSize), func(b *testing.B) {
-			audit.Enabled = false
-			b.Cleanup(func() { audit.Enabled = true })
+			disableAuditForTest(b)
 
 			dataDir := b.TempDir()
 			dbPath := filepath.Join(dataDir, "bench.db")
@@ -568,8 +553,7 @@ func BenchmarkJournalSave(b *testing.B) {
 
 // BenchmarkEventSave benchmarks engine event saves (buffered path).
 func BenchmarkEventSave(b *testing.B) {
-	audit.Enabled = false
-	b.Cleanup(func() { audit.Enabled = true })
+	disableAuditForTest(b)
 
 	dataDir := b.TempDir()
 	dbPath := filepath.Join(dataDir, "bench.db")

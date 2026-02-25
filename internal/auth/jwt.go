@@ -1,12 +1,9 @@
 package auth
 
 import (
-	"crypto/ecdsa"
-	"crypto/rsa"
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -136,49 +133,10 @@ func extractStringClaim(claims jwt.MapClaims, key string) (string, error) {
 	return s, nil
 }
 
-// extractGroupsClaim flexibly extracts a groups claim from the JWT.
-// Handles []interface{} (standard), comma-separated string, or absent claim.
 func extractGroupsClaim(claims jwt.MapClaims, key string) []string {
 	v, ok := claims[key]
 	if !ok {
 		return nil
 	}
-
-	switch val := v.(type) {
-	case []any:
-		groups := make([]string, 0, len(val))
-		for _, item := range val {
-			if s, ok := item.(string); ok && s != "" {
-				groups = append(groups, s)
-			}
-		}
-		if len(groups) == 0 {
-			return nil
-		}
-		return groups
-	case string:
-		if val == "" {
-			return nil
-		}
-		parts := strings.Split(val, ",")
-		groups := make([]string, 0, len(parts))
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p != "" {
-				groups = append(groups, p)
-			}
-		}
-		if len(groups) == 0 {
-			return nil
-		}
-		return groups
-	default:
-		return nil
-	}
+	return parseGroupsFromAny(v)
 }
-
-// Ensure key types are used (avoid import cycle warnings).
-var (
-	_ *rsa.PublicKey   // used by parseSigningKey
-	_ *ecdsa.PublicKey // used by parseSigningKey
-)

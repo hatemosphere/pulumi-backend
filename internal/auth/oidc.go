@@ -406,34 +406,56 @@ func googleHDDomainCheck(allowedDomains []string) domainCheckFunc {
 
 // --- Claim extraction ---
 
-// extractGroupsFromClaims extracts group names from a claims map.
-// Handles []interface{} (standard), []string, and string (single group).
+// parseGroupsFromAny extracts group names from a raw claim value.
+// Handles []string, []any (string elements and Keycloak-style {"name":"..."} maps),
+// and comma-separated strings.
+func parseGroupsFromAny(v any) []string {
+	switch val := v.(type) {
+	case []any:
+		groups := make([]string, 0, len(val))
+		for _, item := range val {
+			switch g := item.(type) {
+			case string:
+				if g != "" {
+					groups = append(groups, g)
+				}
+			case map[string]any:
+				if name, ok := g["name"].(string); ok && name != "" {
+					groups = append(groups, name)
+				}
+			}
+		}
+		if len(groups) == 0 {
+			return nil
+		}
+		return groups
+	case []string:
+		return val
+	case string:
+		if val == "" {
+			return nil
+		}
+		parts := strings.Split(val, ",")
+		groups := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				groups = append(groups, p)
+			}
+		}
+		if len(groups) == 0 {
+			return nil
+		}
+		return groups
+	default:
+		return nil
+	}
+}
+
 func extractGroupsFromClaims(claims map[string]any, claimKey string) []string {
 	raw, ok := claims[claimKey]
 	if !ok {
 		return nil
 	}
-
-	switch v := raw.(type) {
-	case []any:
-		groups := make([]string, 0, len(v))
-		for _, item := range v {
-			switch g := item.(type) {
-			case string:
-				groups = append(groups, g)
-			case map[string]any:
-				// Keycloak-style: {"name": "group-name"}
-				if name, ok := g["name"].(string); ok {
-					groups = append(groups, name)
-				}
-			}
-		}
-		return groups
-	case []string:
-		return v
-	case string:
-		return []string{v}
-	default:
-		return nil
-	}
+	return parseGroupsFromAny(raw)
 }

@@ -1,15 +1,12 @@
 package engine
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,6 +18,7 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 
 	"github.com/hatemosphere/pulumi-backend/internal/backup"
+	"github.com/hatemosphere/pulumi-backend/internal/gziputil"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
@@ -201,7 +199,7 @@ func (m *Manager) DeleteStack(ctx context.Context, org, project, stack string, f
 			}
 			// Decompress if necessary before unmarshaling.
 			deploymentData := state.Deployment
-			if decompressed, err := maybeDecompress(state.Deployment); err == nil {
+			if decompressed, err := gziputil.MaybeDecompress(state.Deployment); err == nil {
 				deploymentData = decompressed
 			}
 
@@ -244,7 +242,7 @@ func (m *Manager) ExportState(ctx context.Context, org, project, stack string, v
 	if version == nil {
 		if cachedCompressed, ok := m.cache.Get(key); ok {
 			// Cache stores compressed data. Decompress for legacy export.
-			return decompress(cachedCompressed)
+			return gziputil.Decompress(cachedCompressed)
 		}
 	}
 
@@ -274,7 +272,7 @@ func (m *Manager) ExportState(ctx context.Context, org, project, stack string, v
 		if isCompressed {
 			m.cache.Add(key, data)
 		} else {
-			if compressed, err := compress(data); err == nil {
+			if compressed, err := gziputil.Compress(data); err == nil {
 				m.cache.Add(key, compressed)
 			}
 		}
@@ -284,7 +282,7 @@ func (m *Manager) ExportState(ctx context.Context, org, project, stack string, v
 	// If was compressed -> Decompress to return.
 	// If was uncompressed -> Return as is.
 	if isCompressed {
-		return decompress(data)
+		return gziputil.Decompress(data)
 	}
 	return data, nil
 }
@@ -334,7 +332,7 @@ func (m *Manager) ExportStateCompressed(ctx context.Context, org, project, stack
 		m.cache.Add(key, data)
 	} else if version == nil && !isCompressed {
 		// If DB returned uncompressed (legacy?), compress and cache.
-		if compressed, err := compress(data); err == nil {
+		if compressed, err := gziputil.Compress(data); err == nil {
 			m.cache.Add(key, compressed)
 			return compressed, true, nil
 		}
@@ -361,7 +359,7 @@ func (m *Manager) ImportState(ctx context.Context, org, project, stack string, d
 	resourceCount := storage.CountResources(deployment)
 
 	// Compress before saving to cache and store (so we don't double compress in store).
-	compressed, err := compress(deployment)
+	compressed, err := gziputil.Compress(deployment)
 	if err != nil {
 		return fmt.Errorf("compress deployment: %w", err)
 	}
@@ -575,7 +573,10 @@ func (m *Manager) RenewLease(ctx context.Context, updateID string, duration time
 	}
 
 	// Update the in-memory lock expiry.
-	u, _ := m.store.GetUpdate(ctx, updateID)
+	u, err := m.store.GetUpdate(ctx, updateID)
+	if err != nil {
+		slog.Warn("failed to fetch update for lease audit", "error", err, "update_id", updateID)
+	}
 	if u != nil {
 		key := stackKey(u.OrgName, u.ProjectName, u.StackName)
 		if v, ok := m.stackLocks.Load(key); ok {
@@ -642,7 +643,7 @@ func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deploymen
 	resourceCount := storage.CountResources(deployment)
 
 	// Compress before saving.
-	compressed, err := compress(deployment)
+	compressed, err := gziputil.Compress(deployment)
 	if err != nil {
 		return fmt.Errorf("compress deployment: %w", err)
 	}
@@ -663,78 +664,6 @@ func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deploymen
 
 	m.cache.Add(stackKey(u.OrgName, u.ProjectName, u.StackName), compressed)
 	return nil
-}
-
-// Pooled gzip writer and buffer to avoid allocating ~800KB per compress() call.
-var gzipWriterPool = sync.Pool{
-	New: func() any { return gzip.NewWriter(nil) },
-}
-
-var bufPool = sync.Pool{
-	New: func() any { return new(bytes.Buffer) },
-}
-
-// compress gzip-compresses data using pooled writers and buffers.
-func compress(data []byte) ([]byte, error) {
-	buf := bufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	buf.Grow(len(data) / 4) // compressed output is typically 3-5x smaller
-
-	gw := gzipWriterPool.Get().(*gzip.Writer)
-	gw.Reset(buf)
-
-	if _, err := gw.Write(data); err != nil {
-		gw.Reset(nil)
-		gzipWriterPool.Put(gw)
-		bufPool.Put(buf)
-		return nil, err
-	}
-	if err := gw.Close(); err != nil {
-		gw.Reset(nil)
-		gzipWriterPool.Put(gw)
-		bufPool.Put(buf)
-		return nil, err
-	}
-
-	// Copy result out before returning buffer to pool.
-	result := make([]byte, buf.Len())
-	copy(result, buf.Bytes())
-
-	gw.Reset(nil)
-	gzipWriterPool.Put(gw)
-	bufPool.Put(buf)
-	return result, nil
-}
-
-func maybeDecompress(data []byte) ([]byte, error) {
-	if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
-		return decompress(data)
-	}
-	return data, nil
-}
-
-func decompress(data []byte) ([]byte, error) {
-	gr, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	defer gr.Close()
-
-	// Pre-allocate output buffer: assume ~4x expansion ratio.
-	buf := bufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	buf.Grow(len(data) * 4)
-
-	_, err = io.Copy(buf, gr) //nolint:gosec // G110: input is our own gzip-compressed state, not untrusted
-	if err != nil {
-		bufPool.Put(buf)
-		return nil, err
-	}
-
-	result := make([]byte, buf.Len())
-	copy(result, buf.Bytes())
-	bufPool.Put(buf)
-	return result, nil
 }
 
 // SaveCheckpointDelta applies a text diff to the previous state to produce the new state.
@@ -988,8 +917,6 @@ func (m *Manager) ValidateUpdateToken(ctx context.Context, updateID, token strin
 
 // --- Backup ---
 
-// Backup creates a consistent backup of the database.
-// Returns the path to the backup file.
 // Backup creates a consistent database backup and uploads to configured remote providers.
 func (m *Manager) Backup(ctx context.Context) (*BackupResult, error) {
 	if m.backupDir == "" && len(m.backupProviders) == 0 {

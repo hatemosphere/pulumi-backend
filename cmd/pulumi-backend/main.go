@@ -195,14 +195,7 @@ func main() {
 			)
 		}
 
-		var allowedDomains []string
-		if cfg.GoogleAllowedDomains != "" {
-			for _, d := range strings.Split(cfg.GoogleAllowedDomains, ",") {
-				if d != "" {
-					allowedDomains = append(allowedDomains, d)
-				}
-			}
-		}
+		allowedDomains := parseCSVList(cfg.GoogleAllowedDomains)
 
 		oidcAuth, err := auth.NewGoogleOIDCAuthenticator(context.Background(), auth.OIDCConfig{
 			ClientID:       cfg.GoogleClientID,
@@ -228,22 +221,8 @@ func main() {
 
 		serverOpts = append(serverOpts, api.WithTokenStore(store))
 
-		var allowedDomains []string
-		if cfg.OIDCAllowedDomains != "" {
-			for _, d := range strings.Split(cfg.OIDCAllowedDomains, ",") {
-				if d != "" {
-					allowedDomains = append(allowedDomains, d)
-				}
-			}
-		}
-		var scopes []string
-		if cfg.OIDCScopes != "" {
-			for _, s := range strings.Split(cfg.OIDCScopes, ",") {
-				if s != "" {
-					scopes = append(scopes, s)
-				}
-			}
-		}
+		allowedDomains := parseCSVList(cfg.OIDCAllowedDomains)
+		scopes := parseCSVList(cfg.OIDCScopes)
 
 		oidcAuth, err := auth.NewOIDCAuthenticator(context.Background(), auth.OIDCConfig{
 			ClientID:       cfg.OIDCClientID,
@@ -355,6 +334,17 @@ func main() {
 	mgr.Shutdown()
 	store.Close()
 	slog.Info("shutdown complete")
+}
+
+func parseCSVList(s string) []string {
+	var result []string
+	for _, v := range strings.Split(s, ",") {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			result = append(result, v)
+		}
+	}
+	return result
 }
 
 // createSecretsProvider builds the secrets provider from config. Exits on error.
