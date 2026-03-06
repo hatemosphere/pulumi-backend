@@ -1,6 +1,6 @@
 # Build Stage
 # Use the official Golang alpine image for a minimal build environment
-FROM golang:1.26.0-alpine AS builder
+FROM golang:1.26.1-alpine AS builder
 
 # Install git for fetching Go modules
 RUN apk add --no-cache git
