@@ -1,6 +1,6 @@
 module github.com/hatemosphere/pulumi-backend
 
-go 1.26.0
+go 1.26.1
 
 require (
 	cloud.google.com/go/kms v1.26.0
