@@ -1,0 +1,19 @@
+FROM alpine:3.23 AS certs
+RUN apk add --no-cache ca-certificates tzdata
+
+FROM scratch
+
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=certs /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=certs /etc/passwd /etc/passwd
+COPY --from=certs /etc/group /etc/group
+
+COPY pulumi-backend /pulumi-backend
+
+USER nobody
+
+EXPOSE 8080
+
+ENV PULUMI_BACKEND_DB=/data/pulumi-backend.db
+
+ENTRYPOINT ["/pulumi-backend"]

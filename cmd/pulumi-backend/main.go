@@ -33,6 +33,12 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
+// Set by goreleaser ldflags.
+var (
+	version = "dev"
+	commit  = "none"
+)
+
 func main() {
 	cfg := config.Parse()
 
@@ -117,22 +123,20 @@ func main() {
 
 	secrets := engine.NewSecretsEngine(secretsProvider)
 
-	// Set up backup providers.
+	// Set up backup provider from destination URI.
 	var backupProviders []backup.Provider
-	if cfg.BackupS3Bucket != "" {
-		s3Provider, s3Err := backup.NewS3Provider(context.Background(), backup.S3Config{
-			Bucket:         cfg.BackupS3Bucket,
+	if cfg.BackupDestination != "" {
+		provider, provErr := backup.ResolveDestination(context.Background(), cfg.BackupDestination, backup.S3Options{
 			Region:         cfg.BackupS3Region,
 			Endpoint:       cfg.BackupS3Endpoint,
-			Prefix:         cfg.BackupS3Prefix,
 			ForcePathStyle: cfg.BackupS3ForcePathStyle,
 		})
-		if s3Err != nil {
-			fmt.Fprintf(os.Stderr, "failed to create S3 backup provider: %v\n", s3Err)
+		if provErr != nil {
+			fmt.Fprintf(os.Stderr, "failed to create backup provider: %v\n", provErr)
 			os.Exit(1)
 		}
-		backupProviders = append(backupProviders, s3Provider)
-		slog.Info("S3 backup enabled", "bucket", cfg.BackupS3Bucket, "prefix", cfg.BackupS3Prefix)
+		backupProviders = append(backupProviders, provider)
+		slog.Info("backup enabled", "destination", cfg.BackupDestination)
 	}
 
 	// Create engine manager.
@@ -382,7 +386,7 @@ func main() {
 		close(done)
 	}()
 
-	slog.Info("pulumi backend starting", "addr", cfg.Addr)
+	slog.Info("pulumi backend starting", "addr", cfg.Addr, "version", version, "commit", commit)
 	slog.Info("login command", "cmd", "pulumi login http://localhost"+cfg.Addr) //nolint:gosec // structured logger
 
 	if cfg.TLS {

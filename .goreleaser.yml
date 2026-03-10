@@ -1,0 +1,49 @@
+version: 2
+
+project_name: pulumi-backend
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: pulumi-backend
+    main: ./cmd/pulumi-backend
+    binary: pulumi-backend
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -w -s
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+dockers_v2:
+  - images:
+      - "ghcr.io/hatemosphere/pulumi-backend:{{ .Version }}"
+      - "ghcr.io/hatemosphere/pulumi-backend:latest"
+    ids:
+      - pulumi-backend
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    dockerfile: Dockerfile.goreleaser
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"

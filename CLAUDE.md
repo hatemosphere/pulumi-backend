@@ -12,7 +12,7 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 - **api/** — huma v2 typed handlers, auto-generated OpenAPI spec, auth + RBAC middleware
 - **auth/** — Authentication (single-tenant, Google OIDC, generic OIDC, JWT), RBAC resolver, groups cache
 - **engine/** — Business logic: stack locks, LRU cache, delta/journal replay, AES-256-GCM secrets
-- **backup/** — Remote backup providers (S3-compatible), scheduler, retention pruning
+- **backup/** — Remote backup providers (S3, GCS), URI-based destination resolver, scheduler, retention pruning
 - **storage/** — `Store` interface + SQLite impl. Deployments stored gzip-compressed.
 - **gziputil/** — Shared gzip compress/decompress with `sync.Pool` and decompression bomb protection
 - **audit/** — Structured audit logging (`audit.Event` struct, `slog.Group("audit", ...)` format)
@@ -44,7 +44,9 @@ CLI -> api.Server (huma v2 + stdlib http.ServeMux) -> engine.Manager -> storage.
 | `internal/engine/aesgcm.go` | Shared AES-256-GCM seal/open helpers |
 | `internal/engine/secrets_provider.go` | `SecretsProvider` interface + local/KMS implementations |
 | `internal/backup/backup.go` | Provider interface, BackupInfo, Prune free function |
+| `internal/backup/destination.go` | URI-based destination resolver (`s3://`, `gs://`) |
 | `internal/backup/s3.go` | S3Provider (S3-compatible: AWS, MinIO, R2, B2) |
+| `internal/backup/gcs.go` | GCSProvider (Google Cloud Storage, ADC credentials) |
 | `internal/backup/scheduler.go` | Ticker-based periodic backup scheduler |
 | `internal/storage/sqlite.go` | SQLite implementation (inline schema, includes `server_config` + `secrets_keys` tables) |
 | `internal/storage/storage.go` | `Store` interface + data types |
@@ -99,8 +101,8 @@ golangci-lint run ./...                                   # lint
 - **Secrets key migration**: `--migrate-secrets-key` flag re-wraps all per-stack DEKs from old provider to new provider, then exits. Supports local↔KMS and key rotation within same provider. Uses `--old-secrets-provider`, `--old-master-key`, `--old-kms-key` flags.
 - **Audit logging**: `audit.Enabled` flag (default true) controls all audit output. Disable with `-audit-logs=false` or `PULUMI_BACKEND_AUDIT_LOGS=false`. Suppressed in test helpers.
 - **Log format**: `-log-format` flag (`json` default, `text` for local dev) + `PULUMI_BACKEND_LOG_FORMAT` env var.
-- **Backup**: `VACUUM INTO` creates consistent point-in-time SQLite snapshots. In WAL mode, uses shared/read lock only — concurrent writes are NOT blocked. Backups uploaded to S3-compatible providers via `backup.Provider` interface. `backup.Scheduler` runs periodic backups (ticker goroutine, same pattern as `eventFlusher`). `backup.Prune` enforces retention policy. Engine's `Backup()` returns `*BackupResult{LocalPath, RemoteKeys}`. Admin API: `POST /api/admin/backup`. AWS credentials via standard SDK chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, IAM role, instance metadata).
-- **Backup tests**: Unit tests use `grafana/s3-mock` (in-process mock S3 server that returns real `*s3.Client` — no interface mocking needed). Integration tests in `reliability_test.go` verify backup during active updates, concurrent checkpoints, and no-destination error.
+- **Backup**: `VACUUM INTO` creates consistent point-in-time SQLite snapshots. In WAL mode, uses shared/read lock only — concurrent writes are NOT blocked. Destination specified via URI (`--backup-destination`): `s3://bucket/prefix` (S3-compatible) or `gs://bucket/prefix` (Google Cloud Storage). `backup.ResolveDestination()` parses the URI scheme and returns the appropriate `backup.Provider`. `backup.Scheduler` runs periodic backups (ticker goroutine, same pattern as `eventFlusher`). `backup.Prune` enforces retention policy. Engine's `Backup()` returns `*BackupResult{LocalPath, RemoteKeys}`. Admin API: `POST /api/admin/backup`. S3 credentials: AWS SDK chain. GCS credentials: Application Default Credentials (workload identity, SA key, `gcloud auth`, metadata server).
+- **Backup tests**: Unit tests use `grafana/s3-mock` (in-process mock S3 server that returns real `*s3.Client` — no interface mocking needed). `destination_test.go` covers URI parsing and scheme resolution. Integration tests in `reliability_test.go` verify backup during active updates, concurrent checkpoints, and no-destination error.
 - **Profiling**: `--pprof` flag / `PULUMI_BACKEND_PPROF=true` enables `/debug/pprof/` endpoints (no auth, dev only). See `docs/performance.md`.
 - **Health probes**: `/healthz` (liveness — always 200), `/readyz` (readiness — pings SQLite, returns 200 or 503). Both on publicAPI (no auth). Kubernetes-standard paths. When `--management-addr` is set, probes and `/metrics` are served on a separate management port (not exposed on the main API port).
 - **Management port**: `--management-addr` / `PULUMI_BACKEND_MANAGEMENT_ADDR` (e.g., `:9090`) serves `/healthz`, `/readyz`, `/metrics` on a dedicated HTTP server. When set, these endpoints are removed from the main mux via `WithSkipManagementRoutes()` option.

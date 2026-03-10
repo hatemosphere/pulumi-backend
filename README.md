@@ -85,15 +85,23 @@ On startup, the backend verifies the master key by decrypting a canary value sto
 | Flag | Env | Default | Description |
 |---|---|---|---|
 | `-backup-dir` | `PULUMI_BACKEND_BACKUP_DIR` | (disabled) | Directory for local SQLite VACUUM INTO backups |
-| `-backup-s3-bucket` | `PULUMI_BACKEND_BACKUP_S3_BUCKET` | (disabled) | S3 bucket for remote backups |
-| `-backup-s3-region` | `PULUMI_BACKEND_BACKUP_S3_REGION` | `us-east-1` | AWS region |
+| `-backup-destination` | `PULUMI_BACKEND_BACKUP_DESTINATION` | (disabled) | Backup destination URI (see below) |
+| `-backup-s3-region` | `PULUMI_BACKEND_BACKUP_S3_REGION` | `us-east-1` | AWS region (S3 only) |
 | `-backup-s3-endpoint` | `PULUMI_BACKEND_BACKUP_S3_ENDPOINT` | | Custom S3 endpoint (MinIO, R2, B2) |
-| `-backup-s3-prefix` | `PULUMI_BACKEND_BACKUP_S3_PREFIX` | `backups/` | Key prefix in S3 bucket |
 | `-backup-s3-force-path-style` | `PULUMI_BACKEND_BACKUP_S3_FORCE_PATH_STYLE` | `false` | Path-style S3 addressing (MinIO) |
 | `-backup-schedule` | `PULUMI_BACKEND_BACKUP_SCHEDULE` | `0` | Periodic backup interval (`6h`, `24h`; 0 = disabled) |
 | `-backup-retention` | `PULUMI_BACKEND_BACKUP_RETENTION` | `0` | Backups to keep per destination (0 = unlimited) |
 
-Backups use SQLite's `VACUUM INTO` which creates a consistent point-in-time snapshot under a shared read lock — concurrent writes are not blocked. Both local directory and S3 destinations can be active simultaneously. AWS credentials are resolved via the standard SDK chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, IAM role, instance metadata).
+The `-backup-destination` flag takes a URI that determines the storage backend:
+
+| URI scheme | Backend | Credentials |
+|---|---|---|
+| `s3://bucket/prefix` | S3-compatible (AWS, MinIO, R2, B2) | AWS SDK chain (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, IAM role, instance metadata) |
+| `gs://bucket/prefix` | Google Cloud Storage | Application Default Credentials (workload identity, SA key, `gcloud auth`, metadata server) |
+
+If only a bucket is specified (e.g., `s3://my-bucket`), the prefix defaults to `backups/`.
+
+Backups use SQLite's `VACUUM INTO` which creates a consistent point-in-time snapshot under a shared read lock — concurrent writes are not blocked. Both local directory and remote destinations can be active simultaneously.
 
 Trigger a manual backup: `POST /api/admin/backup`. With scheduled backups enabled, the backend also runs periodic backups automatically.
 

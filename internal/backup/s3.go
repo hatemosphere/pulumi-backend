@@ -2,7 +2,6 @@ package backup
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,15 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// S3Config holds configuration for the S3 backup provider.
-type S3Config struct {
-	Bucket         string
-	Region         string // default: "us-east-1"
-	Endpoint       string // custom endpoint for MinIO, R2, B2, etc.
-	Prefix         string // key prefix (default: "backups/")
-	ForcePathStyle bool   // force path-style addressing (for MinIO)
-}
-
 // S3Provider implements Provider for S3-compatible storage.
 type S3Provider struct {
 	client *s3.Client
@@ -30,23 +20,17 @@ type S3Provider struct {
 	prefix string
 }
 
-// NewS3Provider creates a new S3-compatible backup provider.
-func NewS3Provider(ctx context.Context, cfg S3Config) (*S3Provider, error) {
-	if cfg.Bucket == "" {
-		return nil, errors.New("S3 bucket name is required")
-	}
-	if cfg.Region == "" {
-		cfg.Region = "us-east-1"
-	}
-	if cfg.Prefix == "" {
-		cfg.Prefix = "backups/"
+func newS3Provider(ctx context.Context, bucket, prefix string, opts S3Options) (*S3Provider, error) {
+	region := opts.Region
+	if region == "" {
+		region = "us-east-1"
 	}
 
 	optFns := []func(*awsconfig.LoadOptions) error{
-		awsconfig.WithRegion(cfg.Region),
+		awsconfig.WithRegion(region),
 	}
-	if cfg.Endpoint != "" {
-		optFns = append(optFns, awsconfig.WithBaseEndpoint(cfg.Endpoint))
+	if opts.Endpoint != "" {
+		optFns = append(optFns, awsconfig.WithBaseEndpoint(opts.Endpoint))
 	}
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, optFns...)
@@ -55,24 +39,23 @@ func NewS3Provider(ctx context.Context, cfg S3Config) (*S3Provider, error) {
 	}
 
 	clientOpts := []func(*s3.Options){}
-	if cfg.ForcePathStyle {
+	if opts.ForcePathStyle {
 		clientOpts = append(clientOpts, func(o *s3.Options) {
 			o.UsePathStyle = true
 		})
 	}
 
 	client := s3.NewFromConfig(awsCfg, clientOpts...)
-	return newS3Provider(client, cfg.Bucket, cfg.Prefix), nil
+	return newS3ProviderFromClient(client, bucket, prefix), nil
 }
 
-// newS3Provider creates an S3Provider with the given client (used in tests with s3-mock).
-func newS3Provider(client *s3.Client, bucket, prefix string) *S3Provider {
+// newS3ProviderFromClient creates an S3Provider with the given client (used in tests with s3-mock).
+func newS3ProviderFromClient(client *s3.Client, bucket, prefix string) *S3Provider {
 	return &S3Provider{client: client, bucket: bucket, prefix: prefix}
 }
 
 func (p *S3Provider) Name() string { return "s3" }
 
-// Upload opens the local file and uploads it to S3.
 func (p *S3Provider) Upload(ctx context.Context, localPath string) (string, error) {
 	f, err := os.Open(localPath)
 	if err != nil {
@@ -95,7 +78,6 @@ func (p *S3Provider) Upload(ctx context.Context, localPath string) (string, erro
 	return key, nil
 }
 
-// List returns all backups under the configured prefix, sorted newest-first.
 func (p *S3Provider) List(ctx context.Context) ([]BackupInfo, error) {
 	var backups []BackupInfo
 
@@ -125,7 +107,6 @@ func (p *S3Provider) List(ctx context.Context) ([]BackupInfo, error) {
 	return backups, nil
 }
 
-// Delete removes a single object from S3.
 func (p *S3Provider) Delete(ctx context.Context, key string) error {
 	_, err := p.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(p.bucket),

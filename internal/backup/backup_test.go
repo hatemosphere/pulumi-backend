@@ -28,7 +28,7 @@ func TestS3Provider_UploadAndList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := newS3Provider(client, bucket, "backups/")
+	p := newS3ProviderFromClient(client, bucket, "backups/")
 
 	// Write a temp file to upload.
 	tmpFile := filepath.Join(t.TempDir(), "backup-20260101-120000.db")
@@ -76,7 +76,7 @@ func TestS3Provider_Delete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := newS3Provider(client, bucket, "backups/")
+	p := newS3ProviderFromClient(client, bucket, "backups/")
 
 	// Upload a file.
 	tmpFile := filepath.Join(t.TempDir(), "backup-to-delete.db")
@@ -118,7 +118,7 @@ func TestS3Provider_ListSortedNewestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := newS3Provider(client, bucket, "pfx/")
+	p := newS3ProviderFromClient(client, bucket, "pfx/")
 
 	// Upload files with 1s+ delays so s3-mock (second-precision timestamps) records different times.
 	dir := t.TempDir()
@@ -236,7 +236,7 @@ func TestPrune_S3Integration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := newS3Provider(client, bucket, "backups/")
+	p := newS3ProviderFromClient(client, bucket, "backups/")
 
 	// Upload 5 backups with unique names and 1s+ delays for distinct timestamps.
 	dir := t.TempDir()
