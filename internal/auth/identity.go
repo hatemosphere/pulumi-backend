@@ -11,6 +11,7 @@ type UserIdentity struct {
 }
 
 type contextKey struct{}
+type ipContextKey struct{}
 
 // WithIdentity stores a UserIdentity in the context.
 func WithIdentity(ctx context.Context, id *UserIdentity) context.Context {
@@ -22,4 +23,15 @@ func WithIdentity(ctx context.Context, id *UserIdentity) context.Context {
 func IdentityFromContext(ctx context.Context) *UserIdentity {
 	id, _ := ctx.Value(contextKey{}).(*UserIdentity)
 	return id
+}
+
+// WithClientIP stores the client IP address in the context.
+func WithClientIP(ctx context.Context, ip string) context.Context {
+	return context.WithValue(ctx, ipContextKey{}, ip)
+}
+
+// ClientIPFromContext retrieves the client IP from the context.
+func ClientIPFromContext(ctx context.Context) string {
+	ip, _ := ctx.Value(ipContextKey{}).(string)
+	return ip
 }

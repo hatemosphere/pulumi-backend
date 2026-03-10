@@ -82,8 +82,10 @@ type Config struct {
 	RBACConfigPath string
 
 	// Logging.
-	LogFormat string // "json" (default) or "text"
-	AuditLogs bool   // enable audit logging (default true)
+	LogFormat    string // "json" (default) or "text"
+	AuditLogs    bool   // enable audit logging (default true)
+	AccessLogs   bool   // enable per-request access logging (default true)
+	AuditLogPath string // audit log destination: "" (same as operational), "stdout", "stderr", or file path
 
 	// Security.
 	TrustedProxies string // comma-separated CIDRs for trusted proxy validation
@@ -177,6 +179,8 @@ func Parse() *Config {
 	// Logging flags.
 	fs.StringVar(&c.LogFormat, "log-format", "json", "log format: json or text")
 	fs.BoolVar(&c.AuditLogs, "audit-logs", true, "enable structured audit logging")
+	fs.BoolVar(&c.AccessLogs, "access-logs", true, "enable per-request access logging")
+	fs.StringVar(&c.AuditLogPath, "audit-log-path", "", "audit log destination: stdout, stderr, or file path (empty = same as operational logs)")
 
 	// Security flags.
 	fs.StringVar(&c.TrustedProxies, "trusted-proxies", "", "comma-separated CIDRs for trusted proxy validation (empty = trust all)")

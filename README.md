@@ -1,25 +1,65 @@
 # pulumi-backend
 
-A self-hosted Pulumi state backend that implements the Pulumi Cloud HTTP API. Single binary, SQLite storage. Runs locally with zero cloud dependencies; optionally integrates with GCP KMS, S3-compatible storage, and OIDC providers.
+A self-hosted Pulumi state backend implementing the Pulumi Cloud HTTP API. Single binary, SQLite storage, journaling checkpoint protocol. Deploys anywhere — laptop, VM, Cloud Run, Kubernetes.
 
-## Why
+## Performance
 
-Pulumi's built-in DIY backends (S3, GCS, Azure Blob, local filesystem) store state as opaque JSON blobs. Every operation reads and writes the entire state file, locks are advisory filesystem locks (or missing entirely on some backends), and there's no server-side secrets management — you need `PULUMI_CONFIG_PASSPHRASE` or a KMS provider.
+pulumi-backend uses the Pulumi Cloud HTTP protocol instead of the DIY blob protocol. The CLI sends incremental journal entries instead of rewriting the entire state file on every resource change. The result:
 
-This backend speaks the same HTTP protocol as Pulumi Cloud, so the CLI uses its more efficient `httpstate` code path instead of the `diy` one.
+### `pulumi up` — 200 resources (create from scratch)
 
-## What's different from DIY blob backends
+```
+pulumi-backend   ▓░ 4.2s
+GCS              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 317s (75x slower)
+CloudSQL PG 17   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 449s (107x slower)
+```
 
-| | DIY (S3/GCS/filesystem) | This backend |
+### `pulumi destroy` — 200 resources
+
+```
+pulumi-backend   ▓░ 3.8s
+GCS              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 326s (86x slower)
+CloudSQL PG 17   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 551s (145x slower)
+```
+
+### `pulumi up` — 600 resources (create from scratch)
+
+```
+pulumi-backend   ▓░ 8.3s
+GCS              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 1274s (153x slower)
+CloudSQL PG 17   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 2614s (315x slower)
+```
+
+### `pulumi destroy` — 600 resources
+
+```
+pulumi-backend   ▓░ 7.2s
+GCS              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 1370s (190x slower)
+CloudSQL PG 17   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 2444s (340x slower)
+```
+
+> All benchmarks: pulumi-backend on Cloud Run (4 vCPU, 8 GB), CloudSQL PostgreSQL 17 (4 vCPU, 8 GB), GCS bucket — same GCP region (europe-west4), client over internet. Averaged over 3 runs. Full results in [docs/benchmark-results.md](docs/benchmark-results.md).
+
+### Why so fast?
+
+DIY backends (S3, GCS, Azure Blob, CloudSQL via `pgstate`) use Pulumi's `diy` code path: every resource change rewrites the **entire** state file. With 600 resources, that's 600 full uploads of growing JSON — O(n²) data transfer.
+
+This backend speaks the Pulumi Cloud HTTP protocol. The CLI uses the `httpstate` code path with `delta-checkpoint-uploads-v2`: after the initial checkpoint, only changed bytes are sent as journal entries — O(n) data transfer.
+
+## Features vs DIY blob backends
+
+| | DIY (S3/GCS/Azure Blob) | pulumi-backend |
 |---|---|---|
-| **State storage** | Single JSON blob per stack, rewritten entirely on every operation | SQLite WAL — only changed rows are written |
-| **Checkpoint updates** | Full state upload every time | Delta checkpoints (text diffs with SHA-256 verification) when state > 1MB |
-| **Journaling** | Not supported | Server-side journal replay — CLI sends per-resource entries instead of full snapshots |
-| **Concurrency** | Advisory file locks (missing on some backends, no TTL) | Server-side update locking with lease renewal and cancel support |
-| **Secrets** | Client-side (passphrase or KMS) | Server-side AES-256-GCM with optional GCP KMS key wrapping |
-| **State compression** | None | Gzip-compressed deployment storage in SQLite |
-| **Listing/querying** | Walk the bucket listing files | SQL queries with pagination |
-| **Auth** | None | Single-tenant, Google OIDC, generic OIDC, or JWT with RBAC |
+| **Checkpoint protocol** | Full state rewrite per resource change | Journal entries — incremental deltas only |
+| **Concurrency** | Advisory file locks (no TTL, missing on some backends) | Server-side leases with TTL, renewal, and cancel |
+| **Secrets** | Client-side (`PULUMI_CONFIG_PASSPHRASE` or KMS) | Server-side AES-256-GCM, optional GCP KMS wrapping |
+| **Auth & RBAC** | None | Single-tenant, Google OIDC, generic OIDC, JWT + group-based RBAC |
+| **Audit logging** | None | Structured JSON audit trail (actor, action, resource, IP) |
+| **State compression** | None | Gzip-compressed storage |
+| **Observability** | None | Prometheus metrics, OpenTelemetry tracing, health probes |
+| **Backup** | Manual bucket copies | Online SQLite backup to S3/GCS with scheduling and retention |
+| **Listing/querying** | Walk bucket listing files | SQL queries with pagination |
+| **State history** | Overwritten on each update | Versioned with configurable retention |
 
 ## Usage
 
@@ -57,15 +97,38 @@ All flags have corresponding environment variables with the `PULUMI_BACKEND_` pr
 | `-tls` | `PULUMI_BACKEND_TLS` | `false` | Enable TLS |
 | `-cert` | `PULUMI_BACKEND_CERT` | | TLS certificate file |
 | `-key` | `PULUMI_BACKEND_KEY` | | TLS key file |
-| `-log-format` | `PULUMI_BACKEND_LOG_FORMAT` | `json` | Log format: `json` or `text` |
-| `-audit-logs` | `PULUMI_BACKEND_AUDIT_LOGS` | `true` | Enable structured audit logging |
-| `-pprof` | `PULUMI_BACKEND_PPROF` | `false` | Enable pprof profiling endpoints at `/debug/pprof/` |
-| `-management-addr` | `PULUMI_BACKEND_MANAGEMENT_ADDR` | (disabled) | Separate listen address for `/healthz`, `/readyz`, `/metrics` (e.g., `:9090`) |
-| `-otel-service-name` | `PULUMI_BACKEND_OTEL_SERVICE_NAME` | (disabled) | OpenTelemetry service name (enables OTLP tracing) |
+| `-public-url` | `PULUMI_BACKEND_PUBLIC_URL` | | Public base URL for redirect URIs (e.g. `https://pulumi.example.com`) |
 
 If no master key is provided, one is auto-generated and printed to stderr. **You must persist it** (e.g. `export PULUMI_BACKEND_MASTER_KEY=...`) — secrets will be undecryptable on restart with a different key.
 
 On startup, the backend verifies the master key by decrypting a canary value stored in the database. If the key is wrong, the server refuses to start with a clear error message instead of silently corrupting secrets.
+
+#### Logging
+
+| Flag | Env | Default | Description |
+|---|---|---|---|
+| `-log-format` | `PULUMI_BACKEND_LOG_FORMAT` | `json` | Log format: `json` or `text` |
+| `-audit-logs` | `PULUMI_BACKEND_AUDIT_LOGS` | `true` | Enable structured audit logging |
+| `-access-logs` | `PULUMI_BACKEND_ACCESS_LOGS` | `true` | Enable per-request access logging |
+| `-audit-log-path` | `PULUMI_BACKEND_AUDIT_LOG_PATH` | | Audit log destination: `stdout`, `stderr`, or file path (empty = same as operational logs) |
+
+Three log categories with independent routing via `log_type` JSON field:
+
+| Category | `log_type` field | Description |
+|---|---|---|
+| Operational | (absent) | Server lifecycle, errors, warnings |
+| Access | `"access"` | Per-HTTP-request logs (method, path, status, latency) |
+| Audit | `"audit"` | Security-relevant events (actor, action, resource, IP) |
+
+In Kubernetes, all three go to stdout as structured JSON. Use Fluent Bit/Vector/Promtail to route based on the `log_type` field — e.g., audit entries to a compliance index, access logs to a separate index, operational to a general one.
+
+#### Observability
+
+| Flag | Env | Default | Description |
+|---|---|---|---|
+| `-pprof` | `PULUMI_BACKEND_PPROF` | `false` | Enable pprof profiling endpoints at `/debug/pprof/` |
+| `-management-addr` | `PULUMI_BACKEND_MANAGEMENT_ADDR` | (disabled) | Separate listen address for `/healthz`, `/readyz`, `/metrics` (e.g., `:9090`) |
+| `-otel-service-name` | `PULUMI_BACKEND_OTEL_SERVICE_NAME` | (disabled) | OpenTelemetry service name (enables OTLP tracing) |
 
 #### Performance tuning
 
@@ -192,10 +255,10 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 
 ## Audit logging
 
-All state-mutating API operations are logged as structured JSON to stdout with actor identity, action, resource, HTTP status, and client IP:
+All state-mutating API operations are logged as structured JSON with actor identity, action, resource, HTTP status, and client IP:
 
 ```json
-{"time":"...","level":"INFO","msg":"Audit Log: API Request","audit":{"actor":"user@example.com","action":"deleteStack","method":"DELETE","resource":"myorg/myproject/dev","http_status":200,"ip_address":"10.0.0.1"}}
+{"time":"...","level":"INFO","msg":"Audit Log: API Request","log_type":"audit","audit":{"actor":"user@example.com","action":"deleteStack","method":"DELETE","resource":"myorg/myproject/dev","http_status":200,"ip_address":"10.0.0.1"}}
 ```
 
 | Event | Level | Trigger |

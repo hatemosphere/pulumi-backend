@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"github.com/segmentio/encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -18,12 +17,25 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/klauspost/compress/gzip"
+	"github.com/segmentio/encoding/json"
 
 	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/auth"
 	"github.com/hatemosphere/pulumi-backend/internal/engine"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
+
+// AccessLog is the destination for per-request access log entries.
+// Defaults to slog.Default(). Set to a no-op logger to disable access logging,
+// or to a separate logger to route access logs independently.
+var AccessLog *slog.Logger
+
+func accessLog() *slog.Logger {
+	if AccessLog != nil {
+		return AccessLog
+	}
+	return slog.Default()
+}
 
 // Server is the HTTP API server.
 type Server struct {
@@ -366,6 +378,10 @@ func (s *Server) authHumaMiddleware(api huma.API) func(ctx huma.Context, next fu
 			return
 		}
 
+		// Store client IP in context for downstream audit logging.
+		ipCtx := auth.WithClientIP(ctx.Context(), ctx.RemoteAddr())
+		ctx = huma.WithContext(ctx, ipCtx)
+
 		switch s.authMode {
 		case "jwt":
 			s.authJWTHuma(api, ctx, next, authHeader)
@@ -646,11 +662,14 @@ func requestLogger(next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
-		slog.Info("request", //nolint:gosec // structured logger, not format string
+		accessLog().Info("request", //nolint:gosec // structured logger, not format string
+			"log_type", "access",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", sw.status,
 			"latency", time.Since(start),
+			"remote_ip", r.RemoteAddr,
+			"user_agent", r.UserAgent(),
 		)
 	})
 }

@@ -134,6 +134,7 @@ func RequirePermission(ctx context.Context, resolver *RBACResolver, org, project
 		Status:   "denied",
 		Resource: org + "/" + project + "/" + stack,
 		Reason:   fmt.Sprintf("insufficient_permissions (require %s, have %s)", required, effective),
+		IP:       ClientIPFromContext(ctx),
 	}.Warn("Audit Log: Access Denied")
 
 	return huma.NewError(http.StatusForbidden,

@@ -2,9 +2,21 @@ package audit
 
 import "log/slog"
 
+// Logger is the destination for audit log entries. Defaults to slog.Default().
+// Set to a separate logger to route audit output independently (e.g. to a
+// dedicated file for compliance).
+var Logger *slog.Logger
+
 // Enabled controls whether audit log entries are emitted. Set to false to
 // suppress all audit output (useful in tests that don't exercise auditing).
 var Enabled = true
+
+func logger() *slog.Logger {
+	if Logger != nil {
+		return Logger
+	}
+	return slog.Default()
+}
 
 // Event represents a structured audit log entry with typed fields.
 // Only non-zero fields are included in the log output.
@@ -27,7 +39,7 @@ func (e Event) Info(msg string) {
 	if !Enabled {
 		return
 	}
-	slog.Info(msg, slog.Group("audit", e.attrs()...)) //nolint:gosec // structured logger safely escapes taint
+	logger().Info(msg, "log_type", "audit", slog.Group("audit", e.attrs()...)) //nolint:gosec // structured logger safely escapes taint
 }
 
 // Warn emits the event as a WARN-level structured audit log entry.
@@ -35,7 +47,7 @@ func (e Event) Warn(msg string) {
 	if !Enabled {
 		return
 	}
-	slog.Warn(msg, slog.Group("audit", e.attrs()...)) //nolint:gosec // structured logger safely escapes taint
+	logger().Warn(msg, "log_type", "audit", slog.Group("audit", e.attrs()...)) //nolint:gosec // structured logger safely escapes taint
 }
 
 // attrs builds the slog attribute list, skipping zero-value fields.

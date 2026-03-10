@@ -7,6 +7,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/hatemosphere/pulumi-backend/internal/audit"
+	"github.com/hatemosphere/pulumi-backend/internal/auth"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
@@ -28,6 +29,7 @@ func (s *Server) registerTokenExchange(api huma.API) {
 				Action: "tokenExchange",
 				Status: "denied",
 				Reason: "id_token_exchange_failed",
+				IP:     auth.ClientIPFromContext(ctx),
 			}.Warn("Audit Log: Token Exchange Failed")
 			return nil, huma.NewError(http.StatusUnauthorized, err.Error())
 		}
@@ -48,6 +50,7 @@ func (s *Server) registerTokenExchange(api huma.API) {
 			Action:     "tokenExchange",
 			Status:     "granted",
 			AuthMethod: "oidc_id_token",
+			IP:         auth.ClientIPFromContext(ctx),
 		}.Info("Audit Log: Token Exchange")
 
 		out := &TokenExchangeOutput{}

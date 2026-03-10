@@ -23,11 +23,11 @@ The benchmark suite in `tests/bench_test.go` covers all performance-critical pat
 
 | Benchmark | What it measures |
 |---|---|
-| `BenchmarkEngineCompression` | Gzip compress + decompress roundtrip at 10/100/1000 resources |
-| `BenchmarkEngineExport` | State export from LRU cache (cached path) at 10/100/1000 resources |
+| `BenchmarkEngineCompression` | Gzip compress + decompress roundtrip at 10/100/1K/5K/10K resources |
+| `BenchmarkEngineExport` | State export from LRU cache (cached path) at 10/100/1K/5K/10K resources |
 | `BenchmarkUpdateLifecycle` | Full create-stack → start-update → checkpoint → complete cycle |
 | `BenchmarkSecretsEngine` | AES-256-GCM encrypt + decrypt roundtrip |
-| `BenchmarkJournalSave` | Journal entry write + replay at 10/100/1000 entries |
+| `BenchmarkJournalSave` | Journal entry write + replay at 1/10/50 entries |
 | `BenchmarkEventSave` | Buffered event write throughput |
 | `BenchmarkSHA256` | SHA-256 hash of deployment payloads (baseline) |
 
@@ -37,10 +37,21 @@ The benchmark suite in `tests/bench_test.go` covers all performance-critical pat
 |---|---|
 | `BenchmarkHealthCheck` | Minimal HTTP roundtrip (baseline latency) |
 | `BenchmarkCreateStack` | Stack creation end-to-end |
-| `BenchmarkCheckpointSave` | Full checkpoint upload path |
-| `BenchmarkStateExport` | State export via HTTP (includes gzip negotiation) |
+| `BenchmarkCheckpointSave` | Full checkpoint upload path at 10/100/1K/5K/10K resources |
+| `BenchmarkStateExport` | State export via HTTP (includes gzip negotiation) at 10/100/1K/5K/10K resources |
 | `BenchmarkSecretsEncrypt` / `Decrypt` | Secrets API roundtrip |
-| `BenchmarkListStacks` | Stack listing with pagination |
+| `BenchmarkListStacks` | Stack listing with pagination at 10/100 stacks |
+
+### Concurrency & stress
+
+| Benchmark | What it measures |
+|---|---|
+| `BenchmarkConcurrentUpdates` | Parallel update lifecycles at 2/4/8/16 goroutines |
+| `BenchmarkConcurrentCheckpoints` | Parallel checkpoint saves at 1K/5K/10K resources |
+| `BenchmarkConcurrentHTTPCheckpoints` | Parallel HTTP checkpoint saves at 1K/5K/10K resources |
+| `BenchmarkConcurrentExportsWhileUpdating` | Export reads during active update writes |
+| `BenchmarkRenameUnderLoad` | Stack rename during concurrent updates |
+| `BenchmarkRenameHTTPUnderLoad` | Stack rename via HTTP during concurrent updates |
 
 ### Reading results
 
@@ -115,8 +126,8 @@ go tool pprof http://localhost:8080/debug/pprof/mutex
 For targeted profiling without running the full server:
 
 ```bash
-# CPU profile of compression path
-go test -bench BenchmarkEngineCompression -benchtime 5s -cpuprofile cpu.prof -timeout 120s ./tests/
+# CPU profile of update lifecycle
+go test -bench BenchmarkUpdateLifecycle -benchtime 10s -cpuprofile cpu.prof -timeout 120s ./tests/
 go tool pprof cpu.prof
 
 # Memory profile of export path
@@ -177,12 +188,19 @@ go tool trace trace.out
 
 ### CPU hotspots
 
-The backend's CPU profile is typically dominated by:
+Profiled on Apple M4 Max during `BenchmarkUpdateLifecycle` (10s run). Percentages
+are cumulative time relative to total benchmark time:
 
-1. **SQLite WAL operations** (~55% during update lifecycle) — inherent to `modernc.org/sqlite`, cannot be optimized at the application level
-2. **Gzip compression** (~14%) — mitigated by `sync.Pool` for `gzip.Writer` reuse
-3. **JSON marshal/unmarshal** (~10%) — inherent to the Pulumi protocol
-4. **SHA-256 hashing** (~5%) — required for checkpoint integrity
+1. **SQLite via Wasm runtime** (~65%) — `ncruces/go-sqlite3` runs SQLite compiled
+   to Wasm via `tetratelabs/wazero`. WAL operations, VFS shm locks, and file I/O
+   dominate. Inherent to the Wasm-based SQLite approach — cannot be optimized at
+   the application level.
+2. **Gzip compression/decompression** (~5%) — mitigated by `sync.Pool` for
+   `gzip.Writer`/`gzip.Reader` reuse in `internal/gziputil/`.
+3. **JSON marshal/unmarshal** (~3%) — uses `segmentio/encoding/json` (2-7x faster
+   than stdlib, near-zero allocs). Remaining cost is inherent to the protocol.
+4. **Crypto** (~3%) — AES-256-GCM for secrets is sub-microsecond. RSA key
+   generation shows up in profiles but only runs during test setup, not per-request.
 
 ### Memory hotspots
 
@@ -190,7 +208,7 @@ Key allocators to watch:
 
 1. **`compress/flate.NewWriter`** — allocates ~800KB per call. Pooled via `sync.Pool` in `internal/gziputil/gziputil.go`
 2. **`io.ReadAll` / buffer growth** — decompression path. Mitigated by pre-sized `bytes.Buffer` from pool
-3. **`json.Unmarshal` into `map[string]any`** — inherent, but minimized by using targeted struct unmarshaling where possible
+3. **`json.Unmarshal` into `map[string]any`** — minimized by using `segmentio/encoding/json` and targeted struct unmarshaling where possible
 
 ### Goroutine leaks
 
@@ -216,22 +234,52 @@ When optimizing allocations:
 
 ### sync.Pool for gzip compression
 
-`gzip.Writer` and `bytes.Buffer` are pooled in `internal/gziputil/gziputil.go`, shared by both engine and storage layers. Each `compress/flate.NewWriter` call allocates ~800KB of internal tables — pooling amortizes this to near-zero for steady-state workloads.
+`gzip.Writer`, `gzip.Reader`, and `bytes.Buffer` are pooled in `internal/gziputil/gziputil.go`, shared by both engine and storage layers. Each `compress/flate.NewWriter` call allocates ~800KB of internal tables — pooling amortizes this to near-zero for steady-state workloads. Includes 512MB decompression bomb limit.
 
 ### Pre-computed resource counts
 
-Resource counts are computed in the engine layer on uncompressed JSON (via `storage.CountResources()`) before compression, and passed to storage via `StackState.ResourceCount`. This avoids decompressing deployment blobs in the storage layer just to count resources for stack listings.
+Resource counts are computed in the engine layer on uncompressed JSON (via `storage.CountResources()`) before compression, and passed to storage via `StackState.ResourceCount`. Uses a zero-alloc byte scanner that finds `"resources":[` and counts top-level objects by brace depth — 7x faster than stdlib JSON unmarshal, zero allocations regardless of resource count.
 
 ### Buffer pre-sizing
 
 Compression buffers are pre-grown to `len(data)/4` (typical gzip ratio). Decompression buffers are pre-grown to `len(data)*4`. This reduces slice growth copies.
 
-### Benchmark results (Apple M4 Max)
+### Fast JSON library
 
-After optimizations:
+`segmentio/encoding/json` is used as a drop-in stdlib replacement throughout. 2-7x faster marshal/unmarshal with near-zero allocations compared to `encoding/json`.
 
-| Benchmark | Memory/op | Allocs/op | Latency |
+### Benchmark results (Apple M4 Max, 16 cores)
+
+Current numbers:
+
+| Benchmark | Latency | Memory/op | Allocs/op |
 |---|---|---|---|
-| `EngineCompression/1000` | 553 KB (-37%) | 1134 | 2.9ms |
-| `EngineExport/1000/cached` | 420 KB (-56%) | 19 (-52%) | 200us (-16%) |
-| `UpdateLifecycle` | 45 KB (-94.5%) | 482 | 750us |
+| `HealthCheck` (HTTP) | 41us | 7.3 KB | 94 |
+| `CreateStack` (HTTP) | 102us | 21 KB | 273 |
+| `CheckpointSave/1000` (HTTP) | 5.9ms | 4.9 MB | 49K |
+| `CheckpointSave/10000` (HTTP) | 52ms | 48 MB | 481K |
+| `StateExport/1000` (HTTP, cached) | 66us | 18 KB | 201 |
+| `StateExport/10000` (HTTP, cached) | 66us | 18 KB | 201 |
+| `SecretsEncrypt` (HTTP) | 49us | 12 KB | 139 |
+| `UpdateLifecycle` (engine) | 610us | 66 KB | 805 |
+| `SecretsEngine/encrypt` | 0.7us | 1.9 KB | 9 |
+| `SecretsEngine/decrypt` | 0.5us | 1.8 KB | 8 |
+| `EngineExport/1000/cached` | 150us | 374 KB | 11 |
+| `JournalSave/batch=50` | 423us | 162 KB | 2K |
+| `ListStacks/100` | 250us | 605 KB | 2.4K |
+
+Notable: `StateExport` latency is constant regardless of resource count (66us
+from 10 to 10K resources) because the cached path returns pre-compressed bytes
+without deserialization.
+
+## End-to-end CLI benchmarks
+
+For real-world wall-clock benchmarks comparing pulumi-backend against DIY backends
+(CloudSQL PostgreSQL, GCS) using actual Pulumi CLI operations, see:
+
+- **[Benchmark results](benchmark-results.md)** — full comparison with charts and analysis
+- **[benchmarks/](../benchmarks/)** — scripts to reproduce (`bench.sh`, `gen-project.py`)
+
+Key finding: at 600 resources, pulumi-backend on Cloud Run is 153-340x faster than
+DIY backends for write-heavy operations (create, destroy) thanks to the journaling
+checkpoint protocol (`delta-checkpoint-uploads-v2`).

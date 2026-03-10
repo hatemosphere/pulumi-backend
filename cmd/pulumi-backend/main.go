@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -51,9 +52,28 @@ func main() {
 	}
 	slog.SetDefault(slog.New(logHandler))
 
+	// Configure audit logger destination.
+	if cfg.AuditLogPath != "" {
+		auditHandler, auditCloser, err := openLogDest(cfg.AuditLogPath, cfg.LogFormat)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to open audit log destination: %v\n", err)
+			os.Exit(1)
+		}
+		if auditCloser != nil {
+			defer auditCloser.Close()
+		}
+		audit.Logger = slog.New(auditHandler)
+		slog.Info("audit log destination configured", "path", cfg.AuditLogPath)
+	}
+
 	// Disable audit logging if configured.
 	if !cfg.AuditLogs {
 		audit.Enabled = false
+	}
+
+	// Disable access logging if configured.
+	if !cfg.AccessLogs {
+		api.AccessLog = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
 	// Open storage.
@@ -611,4 +631,33 @@ func migrateSecretsKeys(store *storage.SQLiteStore, oldProvider, newProvider eng
 	}
 
 	return nil
+}
+
+// openLogDest opens a log destination by path and returns a slog.Handler and
+// optional closer. Supports "stdout", "stderr", or a file path.
+func openLogDest(path, format string) (slog.Handler, io.Closer, error) {
+	var w io.Writer
+	var closer io.Closer
+
+	switch path {
+	case "stdout":
+		w = os.Stdout
+	case "stderr":
+		w = os.Stderr
+	default:
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644) //nolint:gosec // log file, not secrets
+		if err != nil {
+			return nil, nil, err
+		}
+		w = f
+		closer = f
+	}
+
+	var h slog.Handler
+	if format == "text" {
+		h = slog.NewTextHandler(w, nil)
+	} else {
+		h = slog.NewJSONHandler(w, nil)
+	}
+	return h, closer, nil
 }

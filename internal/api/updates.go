@@ -586,6 +586,7 @@ func (s *Server) registerAdminTokens(api huma.API) {
 			Actor:      identity.UserName,
 			Action:     "revokeUserTokens",
 			TargetUser: input.UserName,
+			IP:         auth.ClientIPFromContext(ctx),
 			Extra:      []any{slog.Int64("revoked_count", revoked)},
 		}.Info("Audit Log: Token Revocation")
 

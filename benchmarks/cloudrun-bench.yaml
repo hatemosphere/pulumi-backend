@@ -1,0 +1,40 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/launch-stage: BETA
+  name: pulumi-backend-bench
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/maxScale: "1"
+        autoscaling.knative.dev/minScale: "1"
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/startup-cpu-boost: "true"
+    spec:
+      containerConcurrency: 80
+      containers:
+        - image: europe-west4-docker.pkg.dev/matterlabs-infra-staging/pulumi-backend/pulumi-backend:bench
+          args:
+            - "--addr=:8080"
+            - "--db=/tmp/pulumi-backend.db"
+          ports:
+            - containerPort: 8080
+              name: http1
+          resources:
+            limits:
+              cpu: "4"
+              memory: 8Gi
+          startupProbe:
+            tcpSocket:
+              port: 8080
+            failureThreshold: 1
+            periodSeconds: 240
+            timeoutSeconds: 240
+      timeoutSeconds: 300
+  traffic:
+    - latestRevision: true
+      percent: 100
