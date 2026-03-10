@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"github.com/segmentio/encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -983,7 +983,7 @@ func (m *Manager) Backup(ctx context.Context) (*BackupResult, error) {
 	localPath := filepath.Join(dir, filename)
 
 	if err := m.store.Backup(ctx, localPath); err != nil {
-		return nil, fmt.Errorf("vacuum into: %w", err)
+		return nil, fmt.Errorf("backup: %w", err)
 	}
 
 	result := &BackupResult{

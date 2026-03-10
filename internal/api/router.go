@@ -3,7 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
-	stdjson "encoding/json"
+	"github.com/segmentio/encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -158,9 +158,9 @@ func ParseTrustedProxies(raw string) ([]*net.IPNet, error) {
 // humaJSONFormat uses stdlib encoding/json for huma request/response serialization.
 var humaJSONFormat = huma.Format{
 	Marshal: func(w io.Writer, v any) error {
-		return stdjson.NewEncoder(w).Encode(v)
+		return json.NewEncoder(w).Encode(v)
 	},
-	Unmarshal: stdjson.Unmarshal,
+	Unmarshal: json.Unmarshal,
 }
 
 // newHumaConfig creates the huma configuration for the API.
@@ -337,7 +337,7 @@ func (s *Server) registerPublicRoutes(api huma.API) {
 			Body: func(ctx huma.Context) {
 				ctx.SetHeader("Content-Type", "application/json")
 				if s.humaAPI != nil {
-					data, _ := stdjson.Marshal(s.humaAPI.OpenAPI())
+					data, _ := json.Marshal(s.humaAPI.OpenAPI())
 					_, _ = ctx.BodyWriter().Write(data)
 				} else {
 					_, _ = ctx.BodyWriter().Write([]byte(`{}`))
@@ -729,7 +729,7 @@ func gzipDecompressor(next http.Handler) http.Handler {
 			if err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
-				_ = stdjson.NewEncoder(w).Encode(map[string]any{
+				_ = json.NewEncoder(w).Encode(map[string]any{
 					"code":    http.StatusBadRequest,
 					"message": "invalid gzip body",
 				})
@@ -740,7 +740,7 @@ func gzipDecompressor(next http.Handler) http.Handler {
 			if _, err := io.Copy(&buf, limitReader); err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
-				_ = stdjson.NewEncoder(w).Encode(map[string]any{
+				_ = json.NewEncoder(w).Encode(map[string]any{
 					"code":    http.StatusBadRequest,
 					"message": "invalid gzip body",
 				})
@@ -749,7 +749,7 @@ func gzipDecompressor(next http.Handler) http.Handler {
 			if limitReader.N <= 0 {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
-				_ = stdjson.NewEncoder(w).Encode(map[string]any{
+				_ = json.NewEncoder(w).Encode(map[string]any{
 					"code":    http.StatusRequestEntityTooLarge,
 					"message": "decompressed body exceeds size limit",
 				})

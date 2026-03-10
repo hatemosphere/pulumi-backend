@@ -84,7 +84,7 @@ On startup, the backend verifies the master key by decrypting a canary value sto
 
 | Flag | Env | Default | Description |
 |---|---|---|---|
-| `-backup-dir` | `PULUMI_BACKEND_BACKUP_DIR` | (disabled) | Directory for local SQLite VACUUM INTO backups |
+| `-backup-dir` | `PULUMI_BACKEND_BACKUP_DIR` | (disabled) | Directory for local SQLite backups |
 | `-backup-destination` | `PULUMI_BACKEND_BACKUP_DESTINATION` | (disabled) | Backup destination URI (see below) |
 | `-backup-s3-region` | `PULUMI_BACKEND_BACKUP_S3_REGION` | `us-east-1` | AWS region (S3 only) |
 | `-backup-s3-endpoint` | `PULUMI_BACKEND_BACKUP_S3_ENDPOINT` | | Custom S3 endpoint (MinIO, R2, B2) |
@@ -101,7 +101,7 @@ The `-backup-destination` flag takes a URI that determines the storage backend:
 
 If only a bucket is specified (e.g., `s3://my-bucket`), the prefix defaults to `backups/`.
 
-Backups use SQLite's `VACUUM INTO` which creates a consistent point-in-time snapshot under a shared read lock — concurrent writes are not blocked. Both local directory and remote destinations can be active simultaneously.
+Backups use SQLite's online backup API which creates a consistent point-in-time page-copy snapshot — concurrent writes are not blocked. Both local directory and remote destinations can be active simultaneously.
 
 Trigger a manual backup: `POST /api/admin/backup`. With scheduled backups enabled, the backend also runs periodic backups automatically.
 

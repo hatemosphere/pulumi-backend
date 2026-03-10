@@ -156,9 +156,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	// Delete without force should fail.
@@ -236,9 +235,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/my-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/my-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/my-project/dev",
 	)
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization/my-project/dev", nil)
@@ -267,9 +265,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/old-name")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/old-name",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/old-name",
 	)
 
 	tb.pulumi(t, dir, "stack", "rename", "new-name", "--stack", "organization/test-project/old-name")
@@ -298,19 +295,19 @@ outputs:
   value: "rename-test"
 `)
 
-	journalEnv := []string{"PULUMI_ENABLE_JOURNALING=true"}
+
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/before-rename")
 
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/before-rename")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/before-rename")
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "rename-test-v2"
 `), 0o644)
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/before-rename")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/before-rename")
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization/test-project/before-rename/updates", nil)
 	var histBefore struct {
@@ -328,7 +325,7 @@ outputs:
 		t.Fatal("state lost after rename")
 	}
 
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/after-rename")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/after-rename")
 
 	resp = tb.httpDo(t, "GET", "/api/stacks/organization/test-project/after-rename/updates", nil)
 	var histAfter struct {
@@ -432,9 +429,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	out := tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	out := tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 created") {
 		t.Fatalf("expected '1 created' in up output, got: %s", out)
@@ -460,7 +456,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	out := tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=false"},
+		[]string{"PULUMI_DISABLE_JOURNALING=true"},
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 created") {
@@ -473,7 +469,7 @@ outputs:
 	}
 
 	out = tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=false"},
+		[]string{"PULUMI_DISABLE_JOURNALING=true"},
 		"destroy", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 deleted") {
@@ -494,9 +490,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
@@ -506,9 +501,8 @@ outputs:
   newOutput: "added"
 `), 0o644)
 
-	out := tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	out := tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 unchanged") {
 		t.Fatalf("expected '1 unchanged' in second update, got: %s", out)
@@ -520,9 +514,8 @@ outputs:
   version: "v3"
 `), 0o644)
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 }
 
@@ -536,7 +529,7 @@ outputs:
   value: "v1"
 `)
 
-	journalEnv := []string{"PULUMI_ENABLE_JOURNALING=true"}
+
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
@@ -550,7 +543,7 @@ outputs:
 		t.Fatalf("expected initial version=0, got %d", stackResp.Version)
 	}
 
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 
 	resp = tb.httpDo(t, "GET", "/api/stacks/organization/test-project/dev", nil)
 	httpJSON(t, resp, &stackResp)
@@ -564,7 +557,7 @@ runtime: yaml
 outputs:
   value: "v2"
 `), 0o644)
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 
 	resp = tb.httpDo(t, "GET", "/api/stacks/organization/test-project/dev", nil)
 	httpJSON(t, resp, &stackResp)
@@ -587,9 +580,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	out := tb.pulumi(t, dir, "stack", "output", "greeting", "--stack", "organization/test-project/dev")
@@ -615,9 +607,8 @@ outputs:
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	out := tb.pulumi(t, dir, "stack", "--show-urns", "--stack", "organization/test-project/dev")
@@ -654,9 +645,8 @@ outputs:
 		}
 	}
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	resp = tb.httpDo(t, "GET", "/api/user/stacks?organization=organization", nil)
@@ -697,14 +687,12 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
-	out := tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"destroy", "--yes", "--stack", "organization/test-project/dev",
+	out := tb.pulumi(t, dir,
+"destroy", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 deleted") {
 		t.Fatalf("expected '1 deleted' in destroy output, got: %s", out)
@@ -733,13 +721,13 @@ outputs:
   value: "phase-1"
 `)
 
-	journalEnv := []string{"PULUMI_ENABLE_JOURNALING=true"}
+
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
-	tb.pulumiEnv(t, dir, journalEnv, "destroy", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "destroy", "--yes", "--stack", "organization/test-project/dev")
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
@@ -747,7 +735,7 @@ outputs:
   value: "phase-2"
   new_output: "after-destroy"
 `), 0o644)
-	out := tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+	out := tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 	if !strings.Contains(out, "1 created") {
 		t.Fatalf("expected '1 created' after redeploy, got: %s", out)
 	}
@@ -773,14 +761,12 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
-	out := tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"refresh", "--yes", "--stack", "organization/test-project/dev",
+	out := tb.pulumi(t, dir,
+"refresh", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "unchanged") {
 		t.Fatalf("expected 'unchanged' in refresh output, got: %s", out)
@@ -797,12 +783,12 @@ outputs:
   value: "v1"
 `)
 
-	journalEnv := []string{"PULUMI_ENABLE_JOURNALING=true"}
+
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
@@ -810,9 +796,9 @@ outputs:
   value: "v2"
   extra: "added"
 `), 0o644)
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 
-	out := tb.pulumiEnv(t, dir, journalEnv, "refresh", "--yes", "--stack", "organization/test-project/dev")
+	out := tb.pulumi(t, dir, "refresh", "--yes", "--stack", "organization/test-project/dev")
 	if !strings.Contains(out, "unchanged") {
 		t.Fatalf("expected 'unchanged' in refresh after update, got: %s", out)
 	}
@@ -846,18 +832,15 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"destroy", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"destroy", "--yes", "--stack", "organization/test-project/dev",
 	)
 
-	out := tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"refresh", "--yes", "--stack", "organization/test-project/dev",
+	out := tb.pulumi(t, dir,
+"refresh", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if strings.Contains(out, "error") || strings.Contains(out, "failed") {
 		t.Fatalf("refresh on empty stack should succeed, got: %s", out)
@@ -879,9 +862,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
@@ -926,9 +908,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
@@ -936,9 +917,8 @@ runtime: yaml
 outputs:
   version: "v2"
 `), 0o644)
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization/test-project/dev/export/1", nil)
@@ -987,9 +967,8 @@ outputs:
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/project-source/dev")
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/project-source/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/project-source/dev",
 	)
 
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/project-source/dev")
@@ -1055,12 +1034,12 @@ outputs:
   value: "imported"
 `)
 
-	journalEnv := []string{"PULUMI_ENABLE_JOURNALING=true"}
+
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
 
@@ -1068,7 +1047,7 @@ outputs:
 	_ = os.WriteFile(stateFile, []byte(exported), 0o644)
 	tb.pulumi(t, dir, "stack", "import", "--file", stateFile, "--stack", "organization/test-project/dev")
 
-	out := tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+	out := tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 	if !strings.Contains(out, "1 unchanged") {
 		t.Fatalf("expected '1 unchanged' after update on imported state, got: %s", out)
 	}
@@ -1090,7 +1069,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=false"},
+		[]string{"PULUMI_DISABLE_JOURNALING=true"},
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
@@ -1106,7 +1085,7 @@ outputs:
 `), 0o644)
 
 	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=false"},
+		[]string{"PULUMI_DISABLE_JOURNALING=true"},
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
@@ -1123,7 +1102,7 @@ outputs:
 `), 0o644)
 
 	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=false"},
+		[]string{"PULUMI_DISABLE_JOURNALING=true"},
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
@@ -1146,9 +1125,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
@@ -1157,7 +1135,7 @@ outputs:
   value: "v2"
 `), 0o644)
 	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=false"},
+		[]string{"PULUMI_DISABLE_JOURNALING=true"},
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
@@ -1166,9 +1144,8 @@ runtime: yaml
 outputs:
   value: "v3"
 `), 0o644)
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	out := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
@@ -1191,7 +1168,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=false"},
+		[]string{"PULUMI_DISABLE_JOURNALING=true"},
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
@@ -1205,9 +1182,8 @@ runtime: yaml
 outputs:
   value: "v2"
 `), 0o644)
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
@@ -1216,13 +1192,12 @@ outputs:
   value: "v3"
 `), 0o644)
 	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=false"},
+		[]string{"PULUMI_DISABLE_JOURNALING=true"},
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
-	out = tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"destroy", "--yes", "--stack", "organization/test-project/dev",
+	out = tb.pulumi(t, dir,
+"destroy", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 deleted") {
 		t.Fatalf("expected '1 deleted' in destroy, got: %s", out)
@@ -1258,9 +1233,8 @@ outputs:
 		t.Fatalf("expected 'hello-world' in config get, got: %s", out)
 	}
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
@@ -1289,9 +1263,8 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 	tb.pulumi(t, dir, "config", "set", "mykey", "myvalue", "--stack", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization/test-project/dev/config", nil)
@@ -1325,9 +1298,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	client := &http.Client{}
@@ -1359,9 +1331,8 @@ outputs:
 
 	tb.pulumi(t, dir, "cancel", "--yes", "--stack", "organization/test-project/dev")
 
-	out := tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	out := tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 unchanged") {
 		t.Fatalf("expected '1 unchanged' after cancel, got: %s", out)
@@ -1400,9 +1371,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	client := &http.Client{}
@@ -1439,7 +1409,7 @@ outputs:
 	}
 
 	_, err = tb.pulumiMayFail(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
+		nil,
 		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if err == nil {
@@ -1448,9 +1418,8 @@ outputs:
 
 	tb.pulumi(t, dir, "cancel", "--yes", "--stack", "organization/test-project/dev")
 
-	out := tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	out := tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 unchanged") {
 		t.Fatalf("expected '1 unchanged' after cancel, got: %s", out)
@@ -1472,18 +1441,18 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	journalEnv := []string{"PULUMI_ENABLE_JOURNALING=true"}
 
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
 runtime: yaml
 outputs:
   value: "v2"
 `), 0o644)
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir, journalEnv, "destroy", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "destroy", "--yes", "--stack", "organization/test-project/dev")
 
 	out := tb.pulumi(t, dir, "stack", "history", "--stack", "organization/test-project/dev")
 
@@ -1502,14 +1471,14 @@ outputs:
   value: "v1"
 `)
 
-	journalEnv := []string{"PULUMI_ENABLE_JOURNALING=true"}
+
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
-	tb.pulumiEnv(t, dir, journalEnv, "refresh", "--yes", "--stack", "organization/test-project/dev")
-	tb.pulumiEnv(t, dir, journalEnv, "destroy", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "refresh", "--yes", "--stack", "organization/test-project/dev")
+	tb.pulumi(t, dir, "destroy", "--yes", "--stack", "organization/test-project/dev")
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization/test-project/dev/updates", nil)
 	var histResp struct {
@@ -1550,7 +1519,7 @@ outputs:
   value: "v1"
 `)
 
-	journalEnv := []string{"PULUMI_ENABLE_JOURNALING=true"}
+
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
@@ -1561,7 +1530,7 @@ runtime: yaml
 outputs:
   value: "v%d"
 `, i), 0o644)
-		tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+		tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 	}
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization/test-project/dev/updates?pageSize=2&page=0", nil)
@@ -1607,7 +1576,7 @@ outputs:
   value: "v1"
 `)
 
-	journalEnv := []string{"PULUMI_ENABLE_JOURNALING=true"}
+
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
@@ -1618,7 +1587,7 @@ runtime: yaml
 outputs:
   value: "v%d"
 `, i), 0o644)
-		tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/test-project/dev")
+		tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 	}
 
 	// Default page size is 10, so request more.
@@ -1669,9 +1638,8 @@ func TestLargeState(t *testing.T) {
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/large-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/large-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/large-project/dev",
 	)
 
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/large-project/dev")
@@ -1712,9 +1680,8 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
-	tb.pulumiEnv(t, dir,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	goodState := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
@@ -1762,24 +1729,24 @@ outputs:
   phase: "create"
 `)
 
-	journalEnv := []string{"PULUMI_ENABLE_JOURNALING=true"}
+
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/lifecycle-test/dev")
 
-	out := tb.pulumiEnv(t, dir, journalEnv, "preview", "--stack", "organization/lifecycle-test/dev")
+	out := tb.pulumi(t, dir, "preview", "--stack", "organization/lifecycle-test/dev")
 	if !strings.Contains(out, "create") {
 		t.Fatalf("preview should show create, got: %s", out)
 	}
 
-	out = tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/lifecycle-test/dev")
+	out = tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/lifecycle-test/dev")
 	if !strings.Contains(out, "1 created") {
 		t.Fatalf("first up should create 1 resource, got: %s", out)
 	}
 
-	tb.pulumiEnv(t, dir, journalEnv, "preview", "--stack", "organization/lifecycle-test/dev")
+	tb.pulumi(t, dir, "preview", "--stack", "organization/lifecycle-test/dev")
 
-	out = tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/lifecycle-test/dev")
+	out = tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/lifecycle-test/dev")
 	if !strings.Contains(out, "1 unchanged") {
 		t.Fatalf("no-op up should show 1 unchanged, got: %s", out)
 	}
@@ -1791,12 +1758,12 @@ outputs:
   extra: "value"
 `), 0o644)
 
-	out = tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/lifecycle-test/dev")
+	out = tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/lifecycle-test/dev")
 	if !strings.Contains(out, "1 unchanged") {
 		t.Fatalf("update should show 1 unchanged (stack resource), got: %s", out)
 	}
 
-	out = tb.pulumiEnv(t, dir, journalEnv, "refresh", "--yes", "--stack", "organization/lifecycle-test/dev")
+	out = tb.pulumi(t, dir, "refresh", "--yes", "--stack", "organization/lifecycle-test/dev")
 	if !strings.Contains(out, "unchanged") {
 		t.Fatalf("refresh should show unchanged, got: %s", out)
 	}
@@ -1806,12 +1773,12 @@ outputs:
 	_ = os.WriteFile(exportFile, []byte(exported), 0o644)
 	tb.pulumi(t, dir, "stack", "import", "--file", exportFile, "--stack", "organization/lifecycle-test/dev")
 
-	out = tb.pulumiEnv(t, dir, journalEnv, "up", "--yes", "--stack", "organization/lifecycle-test/dev")
+	out = tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/lifecycle-test/dev")
 	if !strings.Contains(out, "unchanged") {
 		t.Fatalf("up after import should be no-op, got: %s", out)
 	}
 
-	out = tb.pulumiEnv(t, dir, journalEnv, "destroy", "--yes", "--stack", "organization/lifecycle-test/dev")
+	out = tb.pulumi(t, dir, "destroy", "--yes", "--stack", "organization/lifecycle-test/dev")
 	if !strings.Contains(out, "1 deleted") {
 		t.Fatalf("destroy should delete 1 resource, got: %s", out)
 	}
@@ -1861,13 +1828,11 @@ outputs:
 	tb.pulumi(t, dir2, "stack", "init", "organization/project-beta/dev")
 	tb.pulumi(t, dir2, "stack", "init", "organization/project-beta/prod")
 
-	tb.pulumiEnv(t, dir1,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/project-alpha/dev",
+	tb.pulumi(t, dir1,
+"up", "--yes", "--stack", "organization/project-alpha/dev",
 	)
-	tb.pulumiEnv(t, dir2,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/project-beta/dev",
+	tb.pulumi(t, dir2,
+"up", "--yes", "--stack", "organization/project-beta/dev",
 	)
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization", nil)
@@ -1924,9 +1889,8 @@ outputs:
 	tb.pulumi(t, dir2, "stack", "init", "organization/test-project/staging")
 
 	// Deploy only dev.
-	tb.pulumiEnv(t, dir1,
-		[]string{"PULUMI_ENABLE_JOURNALING=true"},
-		"up", "--yes", "--stack", "organization/test-project/dev",
+	tb.pulumi(t, dir1,
+"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization", nil)

@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"encoding/json"
+	"github.com/segmentio/encoding/json"
 	"fmt"
 	"sort"
 )

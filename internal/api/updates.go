@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"encoding/json"
+	"github.com/segmentio/encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"

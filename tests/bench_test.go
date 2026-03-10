@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -175,7 +178,7 @@ func BenchmarkCreateStack(b *testing.B) {
 
 // BenchmarkCheckpointSave benchmarks the full checkpoint save path (HTTP -> engine -> SQLite).
 func BenchmarkCheckpointSave(b *testing.B) {
-	for _, resourceCount := range []int{10, 100, 1000} {
+	for _, resourceCount := range []int{10, 100, 1000, 5000, 10000} {
 		b.Run(fmt.Sprintf("resources=%d", resourceCount), func(b *testing.B) {
 			tb := benchBackend(b)
 			deployment := generateDeployment(resourceCount)
@@ -196,7 +199,7 @@ func BenchmarkCheckpointSave(b *testing.B) {
 				updateID := createResult.UpdateID
 
 				// Start update.
-				resp = benchHTTPDo(b, "POST", fmt.Sprintf("%s/api/stacks/organization/project/bench/update/%s/start", tb.URL, updateID), []byte("{}"))
+				resp = benchHTTPDo(b, "POST", fmt.Sprintf("%s/api/stacks/organization/project/bench/update/%s", tb.URL, updateID), []byte("{}"))
 				var startResult struct {
 					Version int
 					Token   string
@@ -231,7 +234,7 @@ func BenchmarkCheckpointSave(b *testing.B) {
 
 // BenchmarkStateExport benchmarks state export (read path).
 func BenchmarkStateExport(b *testing.B) {
-	for _, resourceCount := range []int{10, 100, 1000} {
+	for _, resourceCount := range []int{10, 100, 1000, 5000, 10000} {
 		b.Run(fmt.Sprintf("resources=%d", resourceCount), func(b *testing.B) {
 			tb := benchBackend(b)
 			deployment := generateDeployment(resourceCount)
@@ -268,7 +271,7 @@ func BenchmarkSecretsEncrypt(b *testing.B) {
 	resp.Body.Close()
 
 	plaintext := strings.Repeat("sensitive-data-", 10)
-	body, _ := json.Marshal(map[string]string{"plaintext": plaintext})
+	body, _ := json.Marshal(map[string]string{"plaintext": base64.StdEncoding.EncodeToString([]byte(plaintext))})
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -293,11 +296,14 @@ func BenchmarkSecretsDecrypt(b *testing.B) {
 
 	// First encrypt to get a ciphertext.
 	plaintext := strings.Repeat("sensitive-data-", 10)
-	encBody, _ := json.Marshal(map[string]string{"plaintext": plaintext})
+	encBody, _ := json.Marshal(map[string]string{"plaintext": base64.StdEncoding.EncodeToString([]byte(plaintext))})
 	resp = benchHTTPDo(b, "POST", tb.URL+"/api/stacks/organization/project/secrets-bench/encrypt", encBody)
 	var encResult struct{ Ciphertext string }
 	_ = json.NewDecoder(resp.Body).Decode(&encResult)
 	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		b.Fatalf("encrypt setup: status %d", resp.StatusCode)
+	}
 
 	decBody, _ := json.Marshal(map[string]string{"ciphertext": encResult.Ciphertext})
 
@@ -346,7 +352,7 @@ func BenchmarkListStacks(b *testing.B) {
 
 // BenchmarkEngineCompression benchmarks gzip compression of deployment data.
 func BenchmarkEngineCompression(b *testing.B) {
-	for _, resourceCount := range []int{10, 100, 1000} {
+	for _, resourceCount := range []int{10, 100, 1000, 5000, 10000} {
 		b.Run(fmt.Sprintf("resources=%d", resourceCount), func(b *testing.B) {
 			disableAuditForTest(b)
 
@@ -377,7 +383,7 @@ func BenchmarkEngineCompression(b *testing.B) {
 
 // BenchmarkEngineExport benchmarks state export from cache and DB.
 func BenchmarkEngineExport(b *testing.B) {
-	for _, resourceCount := range []int{10, 100, 1000} {
+	for _, resourceCount := range []int{10, 100, 1000, 5000, 10000} {
 		b.Run(fmt.Sprintf("resources=%d", resourceCount), func(b *testing.B) {
 			disableAuditForTest(b)
 
@@ -449,7 +455,7 @@ func BenchmarkUpdateLifecycle(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for range b.N {
+	for b.Loop() {
 		result, err := mgr.CreateUpdate(ctx, "org", "proj", "bench", "update", nil, nil)
 		if err != nil {
 			b.Fatal(err)
@@ -579,9 +585,476 @@ func BenchmarkEventSave(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for range b.N {
+	for b.Loop() {
 		if err := mgr.SaveEngineEvents(ctx, result.UpdateID, events); err != nil {
 			b.Fatal(err)
 		}
 	}
+}
+
+// --- Concurrent load benchmarks ---
+
+// BenchmarkConcurrentUpdates runs full update lifecycles in parallel across
+// separate stacks, stressing SQLite WAL contention and engine lock paths.
+// Each iteration uses a unique stack to avoid update lock conflicts.
+func BenchmarkConcurrentUpdates(b *testing.B) {
+	for _, parallelism := range []int{2, 4, 8, 16} {
+		b.Run(fmt.Sprintf("parallel=%d", parallelism), func(b *testing.B) {
+			disableAuditForTest(b)
+
+			dataDir := b.TempDir()
+			dbPath := filepath.Join(dataDir, "bench.db")
+			store, _ := storage.NewSQLiteStore(dbPath, storage.SQLiteStoreConfig{})
+			masterKey := make([]byte, 32)
+			provider, _ := engine.NewLocalSecretsProvider(masterKey)
+			secrets := engine.NewSecretsEngine(provider)
+			mgr, _ := engine.NewManager(store, secrets, engine.ManagerConfig{})
+			b.Cleanup(func() { mgr.Shutdown(); store.Close() })
+
+			deployment := generateDeployment(1000)
+			ctx := context.Background()
+
+			// Pre-create enough stacks for all iterations.
+			const maxStacks = 1024
+			for i := range maxStacks {
+				_ = mgr.CreateStack(ctx, "org", fmt.Sprintf("proj-%d", i), "stack", nil)
+			}
+
+			var counter atomic.Int64
+			b.SetBytes(int64(len(deployment)))
+			b.ResetTimer()
+			b.ReportAllocs()
+			b.SetParallelism(parallelism)
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					idx := counter.Add(1) - 1
+					proj := fmt.Sprintf("proj-%d", idx%maxStacks)
+
+					result, err := mgr.CreateUpdate(ctx, "org", proj, "stack", "update", nil, nil)
+					if err != nil {
+						b.Errorf("CreateUpdate: %v", err)
+						return
+					}
+					if _, err := mgr.StartUpdate(ctx, result.UpdateID, nil, 0); err != nil {
+						b.Errorf("StartUpdate: %v", err)
+						return
+					}
+					if err := mgr.SaveCheckpoint(ctx, result.UpdateID, deployment); err != nil {
+						b.Errorf("SaveCheckpoint: %v", err)
+						return
+					}
+					if err := mgr.CompleteUpdate(ctx, result.UpdateID, "succeeded", json.RawMessage(`{"create":1}`)); err != nil {
+						b.Errorf("CompleteUpdate: %v", err)
+						return
+					}
+				}
+			})
+		})
+	}
+}
+
+// BenchmarkConcurrentCheckpoints runs parallel checkpoint saves on separate stacks
+// with large deployments (5000 resources), stressing gzip compression pools and
+// SQLite write throughput.
+func BenchmarkConcurrentCheckpoints(b *testing.B) {
+	for _, resourceCount := range []int{1000, 5000, 10000} {
+		b.Run(fmt.Sprintf("resources=%d", resourceCount), func(b *testing.B) {
+			const maxStacks = 1024
+			disableAuditForTest(b)
+
+			dataDir := b.TempDir()
+			dbPath := filepath.Join(dataDir, "bench.db")
+			store, _ := storage.NewSQLiteStore(dbPath, storage.SQLiteStoreConfig{})
+			masterKey := make([]byte, 32)
+			provider, _ := engine.NewLocalSecretsProvider(masterKey)
+			secrets := engine.NewSecretsEngine(provider)
+			mgr, _ := engine.NewManager(store, secrets, engine.ManagerConfig{})
+			b.Cleanup(func() { mgr.Shutdown(); store.Close() })
+
+			deployment := generateDeployment(resourceCount)
+			ctx := context.Background()
+
+			for i := range maxStacks {
+				_ = mgr.CreateStack(ctx, "org", fmt.Sprintf("proj-%d", i), "stack", nil)
+			}
+
+			var counter atomic.Int64
+			b.SetBytes(int64(len(deployment)))
+			b.ResetTimer()
+			b.ReportAllocs()
+			b.SetParallelism(8)
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					idx := counter.Add(1) - 1
+					proj := fmt.Sprintf("proj-%d", idx%maxStacks)
+
+					result, err := mgr.CreateUpdate(ctx, "org", proj, "stack", "update", nil, nil)
+					if err != nil {
+						b.Errorf("CreateUpdate: %v", err)
+						return
+					}
+					if _, err := mgr.StartUpdate(ctx, result.UpdateID, nil, 0); err != nil {
+						b.Errorf("StartUpdate: %v", err)
+						return
+					}
+					if err := mgr.SaveCheckpoint(ctx, result.UpdateID, deployment); err != nil {
+						b.Errorf("SaveCheckpoint: %v", err)
+						return
+					}
+					if err := mgr.CompleteUpdate(ctx, result.UpdateID, "succeeded", json.RawMessage(`{"create":1}`)); err != nil {
+						b.Errorf("CompleteUpdate: %v", err)
+						return
+					}
+				}
+			})
+		})
+	}
+}
+
+// BenchmarkConcurrentHTTPCheckpoints is the HTTP-level variant — parallel clients
+// saving large checkpoints through the full HTTP stack.
+func BenchmarkConcurrentHTTPCheckpoints(b *testing.B) {
+	for _, resourceCount := range []int{1000, 5000} {
+		b.Run(fmt.Sprintf("resources=%d", resourceCount), func(b *testing.B) {
+			const (
+				parallelism = 8
+				maxStacks   = 512
+			)
+			tb := benchBackend(b)
+			deployment := generateDeployment(resourceCount)
+
+			// Pre-create stacks.
+			for i := range maxStacks {
+				body := `{"stackName":"stack"}`
+				resp := benchHTTPDo(b, "POST", fmt.Sprintf("%s/api/stacks/organization/proj-%d", tb.URL, i), []byte(body))
+				resp.Body.Close()
+			}
+
+			var counter atomic.Int64
+			b.SetBytes(int64(len(deployment)))
+			b.ResetTimer()
+			b.ReportAllocs()
+			b.SetParallelism(parallelism)
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					idx := counter.Add(1) - 1
+					proj := fmt.Sprintf("proj-%d", idx%maxStacks)
+
+					// Create update.
+					resp := benchHTTPDo(b, "POST",
+						fmt.Sprintf("%s/api/stacks/organization/%s/stack/update", tb.URL, proj),
+						[]byte(`{"kind":"update"}`))
+					var createResult struct{ UpdateID string }
+					_ = json.NewDecoder(resp.Body).Decode(&createResult)
+					resp.Body.Close()
+					updateID := createResult.UpdateID
+
+					// Start update.
+					resp = benchHTTPDo(b, "POST",
+						fmt.Sprintf("%s/api/stacks/organization/%s/stack/update/%s", tb.URL, proj, updateID),
+						[]byte("{}"))
+					_, _ = io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+
+					// Save checkpoint.
+					checkpointBody, _ := json.Marshal(map[string]any{"deployment": json.RawMessage(deployment)})
+					req, _ := http.NewRequest("PATCH",
+						fmt.Sprintf("%s/api/stacks/organization/%s/stack/update/%s/checkpoint", tb.URL, proj, updateID),
+						bytes.NewReader(checkpointBody))
+					req.Header.Set("Authorization", "token test-token")
+					req.Header.Set("Content-Type", "application/json")
+					resp, _ = http.DefaultClient.Do(req)
+					_, _ = io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+					if resp.StatusCode != 200 {
+						b.Errorf("checkpoint save: status %d", resp.StatusCode)
+						return
+					}
+
+					// Complete update.
+					resp = benchHTTPDo(b, "POST",
+						fmt.Sprintf("%s/api/stacks/organization/%s/stack/update/%s/complete", tb.URL, proj, updateID),
+						[]byte(`{"status":"succeeded","result":{"create":1}}`))
+					_, _ = io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+				}
+			})
+		})
+	}
+}
+
+// BenchmarkConcurrentExportsWhileUpdating reads state exports on some stacks
+// while other stacks are being updated — mixed read/write workload.
+func BenchmarkConcurrentExportsWhileUpdating(b *testing.B) {
+	disableAuditForTest(b)
+
+	dataDir := b.TempDir()
+	dbPath := filepath.Join(dataDir, "bench.db")
+	store, _ := storage.NewSQLiteStore(dbPath, storage.SQLiteStoreConfig{})
+	masterKey := make([]byte, 32)
+	provider, _ := engine.NewLocalSecretsProvider(masterKey)
+	secrets := engine.NewSecretsEngine(provider)
+	mgr, _ := engine.NewManager(store, secrets, engine.ManagerConfig{})
+	b.Cleanup(func() { mgr.Shutdown(); store.Close() })
+
+	const (
+		writerStacks = 512
+		readerStacks = 4
+	)
+
+	deployment := generateDeployment(2000)
+	ctx := context.Background()
+
+	// Create writer stacks (each iteration gets a unique one).
+	for i := range writerStacks {
+		_ = mgr.CreateStack(ctx, "org", fmt.Sprintf("writer-%d", i), "stack", nil)
+	}
+	// Create reader stacks and seed with state.
+	for i := range readerStacks {
+		_ = mgr.CreateStack(ctx, "org", fmt.Sprintf("reader-%d", i), "stack", nil)
+		_ = mgr.ImportState(ctx, "org", fmt.Sprintf("reader-%d", i), "stack", deployment)
+	}
+
+	var writerCounter atomic.Int64
+	var readerCounter atomic.Int64
+	b.SetBytes(int64(len(deployment)))
+	b.ResetTimer()
+	b.ReportAllocs()
+	b.SetParallelism(8)
+	b.RunParallel(func(pb *testing.PB) {
+		// Alternate: odd goroutines write, even goroutines read.
+		isWriter := writerCounter.Add(1)%2 == 1
+		for pb.Next() {
+			if isWriter {
+				idx := writerCounter.Add(1) - 1
+				proj := fmt.Sprintf("writer-%d", idx%writerStacks)
+				result, err := mgr.CreateUpdate(ctx, "org", proj, "stack", "update", nil, nil)
+				if err != nil {
+					b.Errorf("CreateUpdate: %v", err)
+					return
+				}
+				if _, err := mgr.StartUpdate(ctx, result.UpdateID, nil, 0); err != nil {
+					b.Errorf("StartUpdate: %v", err)
+					return
+				}
+				if err := mgr.SaveCheckpoint(ctx, result.UpdateID, deployment); err != nil {
+					b.Errorf("SaveCheckpoint: %v", err)
+					return
+				}
+				if err := mgr.CompleteUpdate(ctx, result.UpdateID, "succeeded", json.RawMessage(`{"create":1}`)); err != nil {
+					b.Errorf("CompleteUpdate: %v", err)
+					return
+				}
+			} else {
+				idx := readerCounter.Add(1) - 1
+				proj := fmt.Sprintf("reader-%d", idx%readerStacks)
+				if _, err := mgr.ExportState(ctx, "org", proj, "stack", nil); err != nil {
+					b.Errorf("ExportState: %v", err)
+					return
+				}
+			}
+		}
+	})
+}
+
+// BenchmarkRenameUnderLoad renames stacks while concurrent updates are running
+// on other stacks. Tests SQLite row-level write contention between rename
+// (UPDATE stacks SET) and checkpoint saves (INSERT/UPDATE deployments).
+func BenchmarkRenameUnderLoad(b *testing.B) {
+	disableAuditForTest(b)
+
+	dataDir := b.TempDir()
+	dbPath := filepath.Join(dataDir, "bench.db")
+	store, _ := storage.NewSQLiteStore(dbPath, storage.SQLiteStoreConfig{})
+	masterKey := make([]byte, 32)
+	provider, _ := engine.NewLocalSecretsProvider(masterKey)
+	secrets := engine.NewSecretsEngine(provider)
+	mgr, _ := engine.NewManager(store, secrets, engine.ManagerConfig{})
+	b.Cleanup(func() { mgr.Shutdown(); store.Close() })
+
+	const updaterCount = 4
+	deployment := generateDeployment(1000)
+	ctx := context.Background()
+
+	// Create updater stacks (these run continuous updates).
+	for i := range updaterCount {
+		_ = mgr.CreateStack(ctx, "org", fmt.Sprintf("updater-%d", i), "stack", nil)
+	}
+
+	// Start a background goroutine per updater stack running continuous updates.
+	stopUpdaters := make(chan struct{})
+	updatersDone := make(chan struct{})
+	go func() {
+		defer close(updatersDone)
+		var wg sync.WaitGroup
+		for i := range updaterCount {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				proj := fmt.Sprintf("updater-%d", idx)
+				for {
+					select {
+					case <-stopUpdaters:
+						return
+					default:
+					}
+					result, err := mgr.CreateUpdate(ctx, "org", proj, "stack", "update", nil, nil)
+					if err != nil {
+						continue
+					}
+					if _, err := mgr.StartUpdate(ctx, result.UpdateID, nil, 0); err != nil {
+						continue
+					}
+					_ = mgr.SaveCheckpoint(ctx, result.UpdateID, deployment)
+					_ = mgr.CompleteUpdate(ctx, result.UpdateID, "succeeded", json.RawMessage(`{"create":1}`))
+				}
+			}(i)
+		}
+		wg.Wait()
+	}()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := range b.N {
+		proj := fmt.Sprintf("rename-%d", i)
+		_ = mgr.CreateStack(ctx, "org", proj, "before", nil)
+		_ = mgr.ImportState(ctx, "org", proj, "before", deployment)
+
+		err := mgr.RenameStack(ctx, "org", proj, "before", proj, "after")
+		if err != nil {
+			b.Fatalf("RenameStack: %v", err)
+		}
+
+		// Verify state survived rename.
+		data, err := mgr.ExportState(ctx, "org", proj, "after", nil)
+		if err != nil {
+			b.Fatalf("ExportState after rename: %v", err)
+		}
+		if len(data) == 0 {
+			b.Fatal("empty state after rename")
+		}
+
+		// Clean up.
+		_ = mgr.DeleteStack(ctx, "org", proj, "after", true)
+	}
+
+	close(stopUpdaters)
+	<-updatersDone
+}
+
+// BenchmarkRenameHTTPUnderLoad is the HTTP-level variant — rename requests
+// through the full HTTP stack while concurrent checkpoint saves are running.
+func BenchmarkRenameHTTPUnderLoad(b *testing.B) {
+	tb := benchBackend(b)
+
+	const updaterCount = 4
+	deployment := generateDeployment(1000)
+
+	// Create updater stacks.
+	for i := range updaterCount {
+		resp := benchHTTPDo(b, "POST",
+			fmt.Sprintf("%s/api/stacks/organization/updater-%d", tb.URL, i),
+			[]byte(`{"stackName":"stack"}`))
+		resp.Body.Close()
+	}
+
+	// Background updaters.
+	stopUpdaters := make(chan struct{})
+	updatersDone := make(chan struct{})
+	go func() {
+		defer close(updatersDone)
+		var wg sync.WaitGroup
+		for i := range updaterCount {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				proj := fmt.Sprintf("updater-%d", idx)
+				for {
+					select {
+					case <-stopUpdaters:
+						return
+					default:
+					}
+
+					resp := benchHTTPDo(b, "POST",
+						fmt.Sprintf("%s/api/stacks/organization/%s/stack/update", tb.URL, proj),
+						[]byte(`{"kind":"update"}`))
+					var cr struct{ UpdateID string }
+					_ = json.NewDecoder(resp.Body).Decode(&cr)
+					resp.Body.Close()
+
+					resp = benchHTTPDo(b, "POST",
+						fmt.Sprintf("%s/api/stacks/organization/%s/stack/update/%s", tb.URL, proj, cr.UpdateID),
+						[]byte("{}"))
+					_, _ = io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+
+					checkpointBody, _ := json.Marshal(map[string]any{"deployment": json.RawMessage(deployment)})
+					req, _ := http.NewRequest("PATCH",
+						fmt.Sprintf("%s/api/stacks/organization/%s/stack/update/%s/checkpoint", tb.URL, proj, cr.UpdateID),
+						bytes.NewReader(checkpointBody))
+					req.Header.Set("Authorization", "token test-token")
+					req.Header.Set("Content-Type", "application/json")
+					resp, _ = http.DefaultClient.Do(req)
+					_, _ = io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+
+					resp = benchHTTPDo(b, "POST",
+						fmt.Sprintf("%s/api/stacks/organization/%s/stack/update/%s/complete", tb.URL, proj, cr.UpdateID),
+						[]byte(`{"status":"succeeded","result":{"create":1}}`))
+					_, _ = io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+				}
+			}(i)
+		}
+		wg.Wait()
+	}()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := range b.N {
+		proj := fmt.Sprintf("rename-%d", i)
+
+		// Create stack with state.
+		resp := benchHTTPDo(b, "POST",
+			fmt.Sprintf("%s/api/stacks/organization/%s", tb.URL, proj),
+			[]byte(`{"stackName":"before"}`))
+		resp.Body.Close()
+
+		importBody, _ := json.Marshal(map[string]any{"deployment": json.RawMessage(deployment)})
+		resp = benchHTTPDo(b, "POST",
+			fmt.Sprintf("%s/api/stacks/organization/%s/before/export", tb.URL, proj),
+			importBody)
+		resp.Body.Close()
+
+		// Rename.
+		resp = benchHTTPDo(b, "POST",
+			fmt.Sprintf("%s/api/stacks/organization/%s/before/rename", tb.URL, proj),
+			[]byte(`{"newName":"after"}`))
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 && resp.StatusCode != 204 {
+			b.Fatalf("rename: status %d (iter %d)", resp.StatusCode, i)
+		}
+
+		// Verify state survived.
+		resp = benchHTTPDo(b, "GET",
+			fmt.Sprintf("%s/api/stacks/organization/%s/after/export", tb.URL, proj),
+			nil)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			b.Fatalf("export after rename: status %d (iter %d)", resp.StatusCode, i)
+		}
+
+		// Clean up.
+		resp = benchHTTPDo(b, "DELETE",
+			fmt.Sprintf("%s/api/stacks/organization/%s/after", tb.URL, proj),
+			[]byte(`{"force":true}`))
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+
+	close(stopUpdaters)
+	<-updatersDone
 }

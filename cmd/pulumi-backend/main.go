@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	stdjson "encoding/json"
+	"github.com/segmentio/encoding/json"
 
 	"github.com/hatemosphere/pulumi-backend/internal/api"
 	"github.com/hatemosphere/pulumi-backend/internal/audit"
@@ -336,17 +336,17 @@ func main() {
 		mgmtMux := http.NewServeMux()
 		mgmtMux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_ = stdjson.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		})
 		mgmtMux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 			if err := mgr.Ping(r.Context()); err != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusServiceUnavailable)
-				_ = stdjson.NewEncoder(w).Encode(map[string]string{"status": "error"})
+				_ = json.NewEncoder(w).Encode(map[string]string{"status": "error"})
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_ = stdjson.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		})
 		mgmtMux.Handle("GET /metrics", api.MetricsHandler())
 

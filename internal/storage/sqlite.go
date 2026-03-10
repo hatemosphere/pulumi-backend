@@ -1,20 +1,23 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/segmentio/encoding/json"
+
 	"github.com/XSAM/otelsql"
+	sqlitedriver "github.com/ncruces/go-sqlite3/driver"
+	_ "github.com/ncruces/go-sqlite3/embed"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
 	"github.com/hatemosphere/pulumi-backend/internal/gziputil"
-	_ "modernc.org/sqlite"
 )
 
 func (s *SQLiteStore) Ping(ctx context.Context) error {
@@ -46,12 +49,14 @@ type SQLiteStoreConfig struct {
 
 type SQLiteStore struct {
 	db                *sql.DB
+	dsn               string
 	maxStateVersions  int
 	stackListPageSize int
 }
 
 func NewSQLiteStore(path string, cfgs ...SQLiteStoreConfig) (*SQLiteStore, error) {
-	db, err := otelsql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous(normal)&_pragma=foreign_keys(on)",
+	dsn := "file:" + path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous(normal)&_pragma=foreign_keys(on)"
+	db, err := otelsql.Open("sqlite3", dsn,
 		otelsql.WithAttributes(semconv.DBSystemSqlite),
 		otelsql.WithSpanOptions(otelsql.SpanOptions{DisableErrSkip: true}),
 	)
@@ -76,12 +81,45 @@ func NewSQLiteStore(path string, cfgs ...SQLiteStoreConfig) (*SQLiteStore, error
 		}
 	}
 
-	s := &SQLiteStore{db: db, maxStateVersions: maxVer, stackListPageSize: pageSize}
+	s := &SQLiteStore{db: db, dsn: dsn, maxStateVersions: maxVer, stackListPageSize: pageSize}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := s.enableChecksums(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable checksums: %w", err)
+	}
 	return s, nil
+}
+
+// rawConn opens a direct (non-otelsql) connection for operations that need
+// the ncruces driver.Conn interface (backup API, checksums).
+func (s *SQLiteStore) rawConn(ctx context.Context, fn func(sqlitedriver.Conn) error) error {
+	db, err := sql.Open("sqlite3", s.dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	return conn.Raw(func(driverConn any) error {
+		return fn(driverConn.(sqlitedriver.Conn))
+	})
+}
+
+// enableChecksums enables per-page checksums for corruption detection.
+// This is a one-time operation that VACUUMs the database on first enablement.
+func (s *SQLiteStore) enableChecksums() error {
+	return s.rawConn(context.Background(), func(c sqlitedriver.Conn) error {
+		return c.Raw().EnableChecksums("main")
+	})
 }
 
 func (s *SQLiteStore) Close() error {
@@ -94,8 +132,9 @@ func (s *SQLiteStore) DB() *sql.DB {
 }
 
 func (s *SQLiteStore) Backup(ctx context.Context, destPath string) error {
-	_, err := s.db.ExecContext(ctx, "VACUUM INTO ?", destPath)
-	return err
+	return s.rawConn(ctx, func(c sqlitedriver.Conn) error {
+		return c.Raw().Backup("main", "file:"+destPath)
+	})
 }
 
 // --- Server config ---
@@ -604,16 +643,57 @@ func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 }
 
 // CountResources extracts the resource count from uncompressed deployment JSON.
+// CountResources counts resources in a deployment JSON without unmarshaling.
+// Scans for "resources":[ and counts top-level objects by tracking brace depth.
 func CountResources(deployment []byte) int {
-	var doc struct {
-		Deployment struct {
-			Resources []json.RawMessage `json:"resources"`
-		} `json:"deployment"`
+	// Find "resources":[
+	key := []byte(`"resources":[`)
+	idx := bytes.Index(deployment, key)
+	if idx < 0 {
+		return 0
 	}
-	if json.Unmarshal(deployment, &doc) == nil {
-		return len(doc.Deployment.Resources)
+	pos := idx + len(key)
+
+	count := 0
+	depth := 0
+	inString := false
+	escaped := false
+
+	for pos < len(deployment) {
+		b := deployment[pos]
+		pos++
+
+		if escaped {
+			escaped = false
+			continue
+		}
+		if b == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if b == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+
+		switch b {
+		case '{':
+			if depth == 0 {
+				count++
+			}
+			depth++
+		case '}':
+			depth--
+		case ']':
+			if depth == 0 {
+				return count
+			}
+		}
 	}
-	return 0
+	return count
 }
 
 // --- Updates ---

@@ -1,7 +1,7 @@
 package api
 
 import (
-	"encoding/json"
+	"github.com/segmentio/encoding/json"
 )
 
 // --- Path param mixins ---
