@@ -30,8 +30,10 @@ archives:
 
 dockers_v2:
   - images:
-      - "ghcr.io/hatemosphere/pulumi-backend:{{ .Version }}"
-      - "ghcr.io/hatemosphere/pulumi-backend:latest"
+      - "ghcr.io/hatemosphere/pulumi-backend"
+    tags:
+      - "{{ .Version }}"
+      - latest
     ids:
       - pulumi-backend
     platforms:

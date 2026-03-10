@@ -3,12 +3,14 @@ RUN apk add --no-cache ca-certificates tzdata
 
 FROM scratch
 
+ARG TARGETPLATFORM
+
 COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=certs /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=certs /etc/passwd /etc/passwd
 COPY --from=certs /etc/group /etc/group
 
-COPY pulumi-backend /pulumi-backend
+COPY ${TARGETPLATFORM}/pulumi-backend /pulumi-backend
 
 USER nobody
 
