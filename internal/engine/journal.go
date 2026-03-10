@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"github.com/segmentio/encoding/json"
 	"fmt"
 	"sort"
+
+	"github.com/segmentio/encoding/json"
 
 	"github.com/hatemosphere/pulumi-backend/internal/gziputil"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"

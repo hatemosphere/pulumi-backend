@@ -1,9 +1,10 @@
 package engine
 
 import (
-	"github.com/segmentio/encoding/json"
 	"fmt"
 	"sort"
+
+	"github.com/segmentio/encoding/json"
 )
 
 // textEdit matches the gotextdiff.TextEdit JSON structure used by the Pulumi CLI.

@@ -10,8 +10,10 @@ type UserIdentity struct {
 	IsAdmin   bool     // true in single-tenant mode — bypasses all RBAC checks
 }
 
-type contextKey struct{}
-type ipContextKey struct{}
+type (
+	contextKey   struct{}
+	ipContextKey struct{}
+)
 
 // WithIdentity stores a UserIdentity in the context.
 func WithIdentity(ctx context.Context, id *UserIdentity) context.Context {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"github.com/segmentio/encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/segmentio/encoding/json"
 
 	"github.com/google/uuid"
 	lru "github.com/hashicorp/golang-lru/v2"

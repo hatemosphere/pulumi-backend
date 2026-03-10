@@ -2,8 +2,9 @@ package api
 
 import (
 	"context"
-	"github.com/segmentio/encoding/json"
 	"net/http"
+
+	"github.com/segmentio/encoding/json"
 
 	"github.com/danielgtaylor/huma/v2"
 )

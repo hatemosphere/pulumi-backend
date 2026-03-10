@@ -157,7 +157,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	// Delete without force should fail.
@@ -236,7 +236,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/my-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/my-project/dev",
+		"up", "--yes", "--stack", "organization/my-project/dev",
 	)
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization/my-project/dev", nil)
@@ -266,7 +266,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/old-name")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/old-name",
+		"up", "--yes", "--stack", "organization/test-project/old-name",
 	)
 
 	tb.pulumi(t, dir, "stack", "rename", "new-name", "--stack", "organization/test-project/old-name")
@@ -294,8 +294,6 @@ runtime: yaml
 outputs:
   value: "rename-test"
 `)
-
-
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/before-rename")
@@ -430,7 +428,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	out := tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 created") {
 		t.Fatalf("expected '1 created' in up output, got: %s", out)
@@ -491,7 +489,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
@@ -502,7 +500,7 @@ outputs:
 `), 0o644)
 
 	out := tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 unchanged") {
 		t.Fatalf("expected '1 unchanged' in second update, got: %s", out)
@@ -515,7 +513,7 @@ outputs:
 `), 0o644)
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 }
 
@@ -528,8 +526,6 @@ runtime: yaml
 outputs:
   value: "v1"
 `)
-
-
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
@@ -581,7 +577,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	out := tb.pulumi(t, dir, "stack", "output", "greeting", "--stack", "organization/test-project/dev")
@@ -608,7 +604,7 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	out := tb.pulumi(t, dir, "stack", "--show-urns", "--stack", "organization/test-project/dev")
@@ -646,7 +642,7 @@ outputs:
 	}
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	resp = tb.httpDo(t, "GET", "/api/user/stacks?organization=organization", nil)
@@ -688,11 +684,11 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	out := tb.pulumi(t, dir,
-"destroy", "--yes", "--stack", "organization/test-project/dev",
+		"destroy", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 deleted") {
 		t.Fatalf("expected '1 deleted' in destroy output, got: %s", out)
@@ -720,8 +716,6 @@ runtime: yaml
 outputs:
   value: "phase-1"
 `)
-
-
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
@@ -762,11 +756,11 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	out := tb.pulumi(t, dir,
-"refresh", "--yes", "--stack", "organization/test-project/dev",
+		"refresh", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "unchanged") {
 		t.Fatalf("expected 'unchanged' in refresh output, got: %s", out)
@@ -782,8 +776,6 @@ runtime: yaml
 outputs:
   value: "v1"
 `)
-
-
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
@@ -833,14 +825,14 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	tb.pulumi(t, dir,
-"destroy", "--yes", "--stack", "organization/test-project/dev",
+		"destroy", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	out := tb.pulumi(t, dir,
-"refresh", "--yes", "--stack", "organization/test-project/dev",
+		"refresh", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if strings.Contains(out, "error") || strings.Contains(out, "failed") {
 		t.Fatalf("refresh on empty stack should succeed, got: %s", out)
@@ -863,7 +855,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
@@ -909,7 +901,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
@@ -918,7 +910,7 @@ outputs:
   version: "v2"
 `), 0o644)
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization/test-project/dev/export/1", nil)
@@ -968,7 +960,7 @@ outputs:
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/project-source/dev")
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/project-source/dev",
+		"up", "--yes", "--stack", "organization/project-source/dev",
 	)
 
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/project-source/dev")
@@ -1033,8 +1025,6 @@ runtime: yaml
 outputs:
   value: "imported"
 `)
-
-
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
@@ -1126,7 +1116,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
@@ -1145,7 +1135,7 @@ outputs:
   value: "v3"
 `), 0o644)
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	out := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
@@ -1183,7 +1173,7 @@ outputs:
   value: "v2"
 `), 0o644)
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	_ = os.WriteFile(filepath.Join(dir, "Pulumi.yaml"), []byte(`name: test-project
@@ -1197,7 +1187,7 @@ outputs:
 	)
 
 	out = tb.pulumi(t, dir,
-"destroy", "--yes", "--stack", "organization/test-project/dev",
+		"destroy", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 deleted") {
 		t.Fatalf("expected '1 deleted' in destroy, got: %s", out)
@@ -1234,7 +1224,7 @@ outputs:
 	}
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
@@ -1264,7 +1254,7 @@ outputs:
 	tb.pulumi(t, dir, "config", "set", "mykey", "myvalue", "--stack", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization/test-project/dev/config", nil)
@@ -1299,7 +1289,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	client := &http.Client{}
@@ -1332,7 +1322,7 @@ outputs:
 	tb.pulumi(t, dir, "cancel", "--yes", "--stack", "organization/test-project/dev")
 
 	out := tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 unchanged") {
 		t.Fatalf("expected '1 unchanged' after cancel, got: %s", out)
@@ -1372,7 +1362,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	client := &http.Client{}
@@ -1419,7 +1409,7 @@ outputs:
 	tb.pulumi(t, dir, "cancel", "--yes", "--stack", "organization/test-project/dev")
 
 	out := tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 	if !strings.Contains(out, "1 unchanged") {
 		t.Fatalf("expected '1 unchanged' after cancel, got: %s", out)
@@ -1440,8 +1430,6 @@ outputs:
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
-
-
 
 	tb.pulumi(t, dir, "up", "--yes", "--stack", "organization/test-project/dev")
 
@@ -1470,8 +1458,6 @@ runtime: yaml
 outputs:
   value: "v1"
 `)
-
-
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
@@ -1518,8 +1504,6 @@ runtime: yaml
 outputs:
   value: "v1"
 `)
-
-
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
@@ -1575,8 +1559,6 @@ runtime: yaml
 outputs:
   value: "v1"
 `)
-
-
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
@@ -1639,7 +1621,7 @@ func TestLargeState(t *testing.T) {
 	tb.pulumi(t, dir, "stack", "init", "organization/large-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/large-project/dev",
+		"up", "--yes", "--stack", "organization/large-project/dev",
 	)
 
 	exported := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/large-project/dev")
@@ -1681,7 +1663,7 @@ outputs:
 	tb.pulumi(t, dir, "stack", "init", "organization/test-project/dev")
 
 	tb.pulumi(t, dir,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	goodState := tb.pulumi(t, dir, "stack", "export", "--stack", "organization/test-project/dev")
@@ -1728,8 +1710,6 @@ runtime: yaml
 outputs:
   phase: "create"
 `)
-
-
 
 	tb.pulumi(t, dir, "login", tb.URL)
 	tb.pulumi(t, dir, "stack", "init", "organization/lifecycle-test/dev")
@@ -1829,10 +1809,10 @@ outputs:
 	tb.pulumi(t, dir2, "stack", "init", "organization/project-beta/prod")
 
 	tb.pulumi(t, dir1,
-"up", "--yes", "--stack", "organization/project-alpha/dev",
+		"up", "--yes", "--stack", "organization/project-alpha/dev",
 	)
 	tb.pulumi(t, dir2,
-"up", "--yes", "--stack", "organization/project-beta/dev",
+		"up", "--yes", "--stack", "organization/project-beta/dev",
 	)
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization", nil)
@@ -1890,7 +1870,7 @@ outputs:
 
 	// Deploy only dev.
 	tb.pulumi(t, dir1,
-"up", "--yes", "--stack", "organization/test-project/dev",
+		"up", "--yes", "--stack", "organization/test-project/dev",
 	)
 
 	resp := tb.httpDo(t, "GET", "/api/stacks/organization", nil)

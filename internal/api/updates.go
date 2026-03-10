@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"github.com/segmentio/encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -10,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/segmentio/encoding/json"
 
 	"github.com/danielgtaylor/huma/v2"
 
