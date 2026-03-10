@@ -17,7 +17,7 @@ spec:
     spec:
       containerConcurrency: 80
       containers:
-        - image: europe-west4-docker.pkg.dev/matterlabs-infra-staging/pulumi-backend/pulumi-backend:bench
+        - image: europe-west4-docker.pkg.dev/xxx/pulumi-backend/pulumi-backend:bench
           args:
             - "--addr=:8080"
             - "--db=/tmp/pulumi-backend.db"
