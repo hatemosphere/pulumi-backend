@@ -20,7 +20,7 @@ require (
 	github.com/ncruces/go-sqlite3 v0.31.1
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/prometheus/client_golang v1.23.2
-	github.com/segmentio/encoding v0.5.3
+	github.com/segmentio/encoding v0.5.4
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0
 	go.opentelemetry.io/otel v1.42.0
