@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	cloud.google.com/go/kms v1.26.0
-	cloud.google.com/go/storage v1.61.2
+	cloud.google.com/go/storage v1.61.3
 	github.com/XSAM/otelsql v0.41.0
 	github.com/aws/aws-sdk-go-v2 v1.41.3
 	github.com/aws/aws-sdk-go-v2/config v1.32.11
