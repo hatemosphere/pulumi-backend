@@ -14,7 +14,6 @@ import (
 
 	"github.com/XSAM/otelsql"
 	sqlitedriver "github.com/ncruces/go-sqlite3/driver"
-	_ "github.com/ncruces/go-sqlite3/embed"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
 	"github.com/hatemosphere/pulumi-backend/internal/gziputil"
