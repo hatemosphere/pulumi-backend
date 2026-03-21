@@ -82,7 +82,9 @@ func TestStackHandlers_GetStackShowsActiveUpdate(t *testing.T) {
 
 	rec := api.do(http.MethodPost, "/api/stacks/organization/project/dev/update", map[string]any{"config": map[string]any{}, "metadata": map[string]any{}})
 	require.Equal(t, http.StatusOK, rec.Code)
-	var createResp struct{ UpdateID string `json:"updateID"` }
+	var createResp struct {
+		UpdateID string `json:"updateID"`
+	}
 	api.jsonBody(rec, &createResp)
 
 	rec = api.do(http.MethodPost, "/api/stacks/organization/project/dev/update/"+createResp.UpdateID, map[string]any{})
@@ -104,13 +106,17 @@ func TestStackHandlers_ImportReturnsCompletedUpdate(t *testing.T) {
 		"deployment": map[string]any{"manifest": map[string]any{"time": "2024-01-01T00:00:00Z"}, "resources": []any{}},
 	})
 	require.Equal(t, http.StatusOK, rec.Code)
-	var importBody struct{ UpdateID string `json:"updateID"` }
+	var importBody struct {
+		UpdateID string `json:"updateID"`
+	}
 	api.jsonBody(rec, &importBody)
 	require.NotEmpty(t, importBody.UpdateID)
 
 	rec = api.do(http.MethodGet, "/api/stacks/organization/project/dev/update/"+importBody.UpdateID, nil)
 	require.Equal(t, http.StatusOK, rec.Code)
-	var statusBody struct{ Status string `json:"status"` }
+	var statusBody struct {
+		Status string `json:"status"`
+	}
 	api.jsonBody(rec, &statusBody)
 	assert.Equal(t, "succeeded", statusBody.Status)
 }
@@ -121,7 +127,9 @@ func TestStackHandlers_LeaseRenewalChangesToken(t *testing.T) {
 
 	rec := api.do(http.MethodPost, "/api/stacks/organization/project/dev/update", map[string]any{"config": map[string]any{}, "metadata": map[string]any{}})
 	require.Equal(t, http.StatusOK, rec.Code)
-	var createResp struct{ UpdateID string `json:"updateID"` }
+	var createResp struct {
+		UpdateID string `json:"updateID"`
+	}
 	api.jsonBody(rec, &createResp)
 
 	rec = api.do(http.MethodPost, "/api/stacks/organization/project/dev/update/"+createResp.UpdateID, map[string]any{})
@@ -149,7 +157,9 @@ func TestStackHandlers_EventPagination(t *testing.T) {
 
 	rec := api.do(http.MethodPost, "/api/stacks/organization/project/dev/update", map[string]any{"config": map[string]any{}, "metadata": map[string]any{}})
 	require.Equal(t, http.StatusOK, rec.Code)
-	var createResp struct{ UpdateID string `json:"updateID"` }
+	var createResp struct {
+		UpdateID string `json:"updateID"`
+	}
 	api.jsonBody(rec, &createResp)
 
 	rec = api.do(http.MethodPost, "/api/stacks/organization/project/dev/update/"+createResp.UpdateID, map[string]any{})
@@ -173,7 +183,9 @@ func TestStackHandlers_EventPagination(t *testing.T) {
 
 	rec = api.do(http.MethodGet, "/api/stacks/organization/project/dev/update/"+createResp.UpdateID+"/events?continuationToken=3", nil)
 	require.Equal(t, http.StatusOK, rec.Code)
-	var pageBody struct{ Events []json.RawMessage `json:"events"` }
+	var pageBody struct {
+		Events []json.RawMessage `json:"events"`
+	}
 	api.jsonBody(rec, &pageBody)
 	assert.Len(t, pageBody.Events, 2)
 }
@@ -196,7 +208,9 @@ func TestStackHandlers_Rename(t *testing.T) {
 
 	rec = api.do(http.MethodGet, "/api/stacks/organization/test-project/new-name", nil)
 	require.Equal(t, http.StatusOK, rec.Code)
-	var body struct{ StackName string `json:"stackName"` }
+	var body struct {
+		StackName string `json:"stackName"`
+	}
 	api.jsonBody(rec, &body)
 	assert.Equal(t, "new-name", body.StackName)
 }
@@ -209,7 +223,9 @@ func TestStackHandlers_Tags(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 
 	rec = api.do(http.MethodGet, "/api/stacks/organization/test-project/dev", nil)
-	var body struct{ Tags map[string]string `json:"tags"` }
+	var body struct {
+		Tags map[string]string `json:"tags"`
+	}
 	api.jsonBody(rec, &body)
 	assert.Equal(t, "production", body.Tags["env"])
 	assert.Equal(t, "platform", body.Tags["team"])
@@ -217,7 +233,9 @@ func TestStackHandlers_Tags(t *testing.T) {
 	// Replace all tags.
 	api.do(http.MethodPatch, "/api/stacks/organization/test-project/dev/tags", map[string]string{"env": "staging"})
 	rec = api.do(http.MethodGet, "/api/stacks/organization/test-project/dev", nil)
-	var body2 struct{ Tags map[string]string `json:"tags"` }
+	var body2 struct {
+		Tags map[string]string `json:"tags"`
+	}
 	api.jsonBody(rec, &body2)
 	assert.Equal(t, "staging", body2.Tags["env"])
 	assert.Empty(t, body2.Tags["team"])
@@ -284,13 +302,17 @@ func TestStackHandlers_EncryptDecrypt(t *testing.T) {
 
 	rec := api.do(http.MethodPost, "/api/stacks/organization/test-project/dev/encrypt", map[string]string{"plaintext": b64})
 	require.Equal(t, http.StatusOK, rec.Code)
-	var encResp struct{ Ciphertext string `json:"ciphertext"` }
+	var encResp struct {
+		Ciphertext string `json:"ciphertext"`
+	}
 	api.jsonBody(rec, &encResp)
 	require.NotEmpty(t, encResp.Ciphertext)
 
 	rec = api.do(http.MethodPost, "/api/stacks/organization/test-project/dev/decrypt", map[string]string{"ciphertext": encResp.Ciphertext})
 	require.Equal(t, http.StatusOK, rec.Code)
-	var decResp struct{ Plaintext string `json:"plaintext"` }
+	var decResp struct {
+		Plaintext string `json:"plaintext"`
+	}
 	api.jsonBody(rec, &decResp)
 
 	decoded, err := base64.StdEncoding.DecodeString(decResp.Plaintext)
@@ -307,13 +329,17 @@ func TestStackHandlers_BatchEncryptDecrypt(t *testing.T) {
 
 	rec := api.do(http.MethodPost, "/api/stacks/organization/test-project/dev/batch-encrypt", map[string]any{"plaintexts": []string{pt1, pt2}})
 	require.Equal(t, http.StatusOK, rec.Code)
-	var batchEnc struct{ Ciphertexts []string `json:"ciphertexts"` }
+	var batchEnc struct {
+		Ciphertexts []string `json:"ciphertexts"`
+	}
 	api.jsonBody(rec, &batchEnc)
 	require.Len(t, batchEnc.Ciphertexts, 2)
 
 	rec = api.do(http.MethodPost, "/api/stacks/organization/test-project/dev/batch-decrypt", map[string]any{"ciphertexts": batchEnc.Ciphertexts})
 	require.Equal(t, http.StatusOK, rec.Code)
-	var batchDec struct{ Plaintexts map[string]string `json:"plaintexts"` }
+	var batchDec struct {
+		Plaintexts map[string]string `json:"plaintexts"`
+	}
 	api.jsonBody(rec, &batchDec)
 	assert.Len(t, batchDec.Plaintexts, 2)
 }
@@ -329,7 +355,9 @@ func TestStackHandlers_MultipleSecretsReuseKey(t *testing.T) {
 		b64 := base64.StdEncoding.EncodeToString([]byte(s))
 		rec := api.do(http.MethodPost, "/api/stacks/organization/test-project/dev/encrypt", map[string]string{"plaintext": b64})
 		require.Equal(t, http.StatusOK, rec.Code)
-		var encResp struct{ Ciphertext string `json:"ciphertext"` }
+		var encResp struct {
+			Ciphertext string `json:"ciphertext"`
+		}
 		api.jsonBody(rec, &encResp)
 		ciphertexts[i] = encResp.Ciphertext
 	}
@@ -337,7 +365,9 @@ func TestStackHandlers_MultipleSecretsReuseKey(t *testing.T) {
 	for i, ct := range ciphertexts {
 		rec := api.do(http.MethodPost, "/api/stacks/organization/test-project/dev/decrypt", map[string]string{"ciphertext": ct})
 		require.Equal(t, http.StatusOK, rec.Code)
-		var decResp struct{ Plaintext string `json:"plaintext"` }
+		var decResp struct {
+			Plaintext string `json:"plaintext"`
+		}
 		api.jsonBody(rec, &decResp)
 		decoded, err := base64.StdEncoding.DecodeString(decResp.Plaintext)
 		require.NoError(t, err)
@@ -353,13 +383,17 @@ func TestStackHandlers_SecretsIsolation(t *testing.T) {
 	plaintext := base64.StdEncoding.EncodeToString([]byte("cross-stack-secret"))
 	rec := api.do(http.MethodPost, "/api/stacks/organization/test-project/stack-a/encrypt", map[string]string{"plaintext": plaintext})
 	require.Equal(t, http.StatusOK, rec.Code)
-	var encResp struct{ Ciphertext string `json:"ciphertext"` }
+	var encResp struct {
+		Ciphertext string `json:"ciphertext"`
+	}
 	api.jsonBody(rec, &encResp)
 
 	// Decrypt with stack-b should fail (different stack key).
 	rec = api.do(http.MethodPost, "/api/stacks/organization/test-project/stack-b/decrypt", map[string]string{"ciphertext": encResp.Ciphertext})
 	if rec.Code == http.StatusOK {
-		var decResp struct{ Plaintext string `json:"plaintext"` }
+		var decResp struct {
+			Plaintext string `json:"plaintext"`
+		}
 		api.jsonBody(rec, &decResp)
 		decoded, _ := base64.StdEncoding.DecodeString(decResp.Plaintext)
 		assert.NotEqual(t, "cross-stack-secret", string(decoded), "cross-stack decryption should fail")
@@ -386,7 +420,9 @@ func (a *testAPI) createStackAndUpdate(t *testing.T, stack string) updateSetup {
 	rec := a.do(http.MethodPost, fmt.Sprintf("/api/stacks/organization/test-project/%s/update", stack),
 		map[string]any{"config": map[string]any{}, "metadata": map[string]any{}})
 	require.Equal(t, http.StatusOK, rec.Code)
-	var resp struct{ UpdateID string `json:"updateID"` }
+	var resp struct {
+		UpdateID string `json:"updateID"`
+	}
 	a.jsonBody(rec, &resp)
 	return updateSetup{updateID: resp.UpdateID}
 }

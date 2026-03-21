@@ -174,7 +174,9 @@ func TestUpdateHandlers_Lifecycle(t *testing.T) {
 
 	// Events after completion have no continuationToken.
 	rec = api.do(http.MethodGet, api.updatePath("dev", setup.updateID)+"/events", nil)
-	var finalEvents struct{ ContinuationToken *string `json:"continuationToken"` }
+	var finalEvents struct {
+		ContinuationToken *string `json:"continuationToken"`
+	}
 	api.jsonBody(rec, &finalEvents)
 	assert.Nil(t, finalEvents.ContinuationToken)
 }
@@ -184,7 +186,9 @@ func TestUpdateHandlers_StartNonExistentStackFails(t *testing.T) {
 
 	rec := api.do(http.MethodPost, "/api/stacks/organization/no-project/no-stack/update",
 		map[string]any{"config": map[string]any{}, "metadata": map[string]any{}})
-	var createResp struct{ UpdateID string `json:"updateID"` }
+	var createResp struct {
+		UpdateID string `json:"updateID"`
+	}
 	api.jsonBody(rec, &createResp)
 
 	rec = api.do(http.MethodPost, "/api/stacks/organization/no-project/no-stack/update/"+createResp.UpdateID, map[string]any{})
@@ -214,7 +218,9 @@ func TestUpdateHandlers_CompleteWithFailedStatus(t *testing.T) {
 	// History should show failed.
 	rec = api.do(http.MethodGet, api.stackPath("dev")+"/updates", nil)
 	var histResp struct {
-		Updates []struct{ Result string `json:"result"` } `json:"updates"`
+		Updates []struct {
+			Result string `json:"result"`
+		} `json:"updates"`
 	}
 	api.jsonBody(rec, &histResp)
 	require.NotEmpty(t, histResp.Updates)
@@ -256,7 +262,9 @@ func TestUpdateHandlers_ConcurrentDifferentStacks(t *testing.T) {
 			defer wg.Done()
 			rec := api.do(http.MethodPost, api.stackPath(name)+"/update",
 				map[string]any{"config": map[string]any{}, "metadata": map[string]any{}})
-			var resp struct{ UpdateID string `json:"updateID"` }
+			var resp struct {
+				UpdateID string `json:"updateID"`
+			}
 			api.jsonBody(rec, &resp)
 			if resp.UpdateID == "" {
 				errs[idx] = fmt.Errorf("empty updateID for %s", name)
@@ -308,7 +316,9 @@ func TestUpdateHandlers_JournalEntries(t *testing.T) {
 	api := newTestAPI(t)
 	setup := api.createStackAndUpdate(t, "dev")
 	rec := api.startUpdate(t, "dev", setup.updateID, map[string]any{"tags": map[string]string{}, "journalVersion": 1})
-	var startResp struct{ JournalVersion int `json:"journalVersion"` }
+	var startResp struct {
+		JournalVersion int `json:"journalVersion"`
+	}
 	api.jsonBody(rec, &startResp)
 	assert.Equal(t, 1, startResp.JournalVersion)
 

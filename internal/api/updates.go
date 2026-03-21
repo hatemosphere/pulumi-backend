@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -73,20 +74,14 @@ func containsAbsolutePath(msg string) bool {
 		return true
 	}
 
-	for _, field := range strings.FieldsFunc(msg, func(r rune) bool {
+	return slices.ContainsFunc(strings.FieldsFunc(msg, func(r rune) bool {
 		switch r {
 		case ' ', '\t', '\n', '\r', ',', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\'':
 			return true
 		default:
 			return false
 		}
-	}) {
-		if filepath.IsAbs(field) {
-			return true
-		}
-	}
-
-	return false
+	}), filepath.IsAbs)
 }
 
 func registerUpdateCreateRoute(s *Server, api huma.API, kind string) {
