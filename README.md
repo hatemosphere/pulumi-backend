@@ -220,6 +220,10 @@ Four auth modes: `single-tenant` (default), `google`, `oidc`, and `jwt`.
 | `-auth-mode` | `PULUMI_BACKEND_AUTH_MODE` | `single-tenant` | `single-tenant`, `google`, `oidc`, or `jwt` |
 | `-rbac-config` | `PULUMI_BACKEND_RBAC_CONFIG` | | Path to RBAC config YAML (disabled if not set) |
 
+`single-tenant` is intentionally trust-based. Any request with `Authorization: token ...` is treated as the configured default user and granted admin access. There is no token lookup, expiry, or per-user identity in this mode, so it should only be used behind a trusted network boundary or reverse proxy.
+
+`update-token` is different from a normal user token. It is always treated as an update-scoped capability token for a specific in-progress update, and is only accepted on update endpoints that include the matching `{updateID}`. It does not grant general API access, even in `single-tenant` mode.
+
 - **[Google OIDC setup guide](docs/auth-google.md)** — OAuth2, Workspace groups, keyless DWD, GKE Workload Identity
 - **[Generic OIDC setup guide](docs/auth-oidc.md)** — Okta, Entra ID, Keycloak, any OIDC provider
 - **[JWT setup guide](docs/auth-jwt.md)** — HMAC/RSA/ECDSA, Dex, Keycloak integration

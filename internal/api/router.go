@@ -382,6 +382,11 @@ func (s *Server) authHumaMiddleware(api huma.API) func(ctx huma.Context, next fu
 		ipCtx := auth.WithClientIP(ctx.Context(), ctx.RemoteAddr())
 		ctx = huma.WithContext(ctx, ipCtx)
 
+		// Update tokens are always update-scoped, regardless of auth mode.
+		if s.handleUpdateTokenHuma(api, ctx, next, authHeader) {
+			return
+		}
+
 		switch s.authMode {
 		case "jwt":
 			s.authJWTHuma(api, ctx, next, authHeader)
@@ -425,10 +430,6 @@ func (s *Server) handleUpdateTokenHuma(api huma.API, ctx huma.Context, next func
 // authJWTHuma handles JWT auth mode: stateless token validation with identity
 // and groups extracted directly from JWT claims.
 func (s *Server) authJWTHuma(api huma.API, ctx huma.Context, next func(huma.Context), authHeader string) {
-	if s.handleUpdateTokenHuma(api, ctx, next, authHeader) {
-		return
-	}
-
 	tokenValue := strings.TrimPrefix(authHeader, "token ")
 	identity, err := s.jwtAuth.Validate(tokenValue)
 	if err != nil {
@@ -445,10 +446,6 @@ func (s *Server) authJWTHuma(api huma.API, ctx huma.Context, next func(huma.Cont
 // backend-issued tokens looked up in the database, with optional group
 // resolution via the groups cache or stored token groups.
 func (s *Server) authOIDCHuma(api huma.API, ctx huma.Context, next func(huma.Context), authHeader string) {
-	if s.handleUpdateTokenHuma(api, ctx, next, authHeader) {
-		return
-	}
-
 	tokenValue := strings.TrimPrefix(authHeader, "token ")
 	tokenHash := auth.HashToken(tokenValue)
 

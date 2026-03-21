@@ -24,6 +24,7 @@ import (
 type testBackend struct {
 	URL     string
 	server  *http.Server
+	mgr     *engine.Manager
 	store   *storage.SQLiteStore
 	dataDir string
 	dbPath  string
@@ -42,21 +43,16 @@ type backendConfig struct {
 	storageConfig storage.SQLiteStoreConfig
 }
 
-// startBackendWithConfig starts a backend with custom engine and storage config.
-func startBackendWithConfig(t *testing.T, cfg backendConfig) *testBackend {
+func startBackendFixture(t *testing.T, dbPath string, masterKey []byte, cfg backendConfig) *testBackend {
 	t.Helper()
 
 	disableAuditForTest(t)
-
-	dataDir := t.TempDir()
-	dbPath := filepath.Join(dataDir, "test.db")
 
 	store, err := storage.NewSQLiteStore(dbPath, cfg.storageConfig)
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
 
-	masterKey := make([]byte, 32)
 	provider, err := engine.NewLocalSecretsProvider(masterKey)
 	if err != nil {
 		t.Fatalf("failed to create secrets provider: %v", err)
@@ -83,58 +79,7 @@ func startBackendWithConfig(t *testing.T, cfg backendConfig) *testBackend {
 	tb := &testBackend{
 		URL:     fmt.Sprintf("http://127.0.0.1:%d", port),
 		server:  httpServer,
-		store:   store,
-		dataDir: dataDir,
-		dbPath:  dbPath,
-	}
-
-	t.Cleanup(func() {
-		_ = httpServer.Close()
-		_ = store.Close()
-	})
-
-	waitForBackend(t, tb.URL)
-	return tb
-}
-
-// startBackendWithDB starts a backend against an existing database with a specific master key.
-// Used for testing restart scenarios (e.g. master key persistence).
-func startBackendWithDB(t *testing.T, dbPath string, masterKey []byte) *testBackend {
-	t.Helper()
-
-	disableAuditForTest(t)
-
-	store, err := storage.NewSQLiteStore(dbPath, storage.SQLiteStoreConfig{})
-	if err != nil {
-		t.Fatalf("failed to open database: %v", err)
-	}
-
-	provider, err := engine.NewLocalSecretsProvider(masterKey)
-	if err != nil {
-		t.Fatalf("failed to create secrets provider: %v", err)
-	}
-	secrets := engine.NewSecretsEngine(provider)
-
-	mgr, err := engine.NewManager(store, secrets, engine.ManagerConfig{})
-	if err != nil {
-		t.Fatalf("failed to create engine: %v", err)
-	}
-
-	srv := api.NewServer(mgr, "organization", "test-user")
-	router := srv.Router()
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to listen: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-
-	httpServer := &http.Server{Handler: router, ReadHeaderTimeout: 10 * time.Second} //nolint:gosec // test server
-	go func() { _ = httpServer.Serve(listener) }()
-
-	tb := &testBackend{
-		URL:     fmt.Sprintf("http://127.0.0.1:%d", port),
-		server:  httpServer,
+		mgr:     mgr,
 		store:   store,
 		dataDir: filepath.Dir(dbPath),
 		dbPath:  dbPath,
@@ -142,11 +87,31 @@ func startBackendWithDB(t *testing.T, dbPath string, masterKey []byte) *testBack
 
 	t.Cleanup(func() {
 		_ = httpServer.Close()
+		mgr.Shutdown()
 		_ = store.Close()
 	})
 
 	waitForBackend(t, tb.URL)
 	return tb
+}
+
+// startBackendWithConfig starts a backend with custom engine and storage config.
+func startBackendWithConfig(t *testing.T, cfg backendConfig) *testBackend {
+	t.Helper()
+
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "test.db")
+	masterKey := make([]byte, 32)
+	tb := startBackendFixture(t, dbPath, masterKey, cfg)
+	tb.dataDir = dataDir
+	return tb
+}
+
+// startBackendWithDB starts a backend against an existing database with a specific master key.
+// Used for testing restart scenarios (e.g. master key persistence).
+func startBackendWithDB(t *testing.T, dbPath string, masterKey []byte) *testBackend {
+	t.Helper()
+	return startBackendFixture(t, dbPath, masterKey, backendConfig{})
 }
 
 // disableAuditForTest suppresses audit logging for the duration of a test.

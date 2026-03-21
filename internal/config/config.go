@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -109,9 +110,14 @@ type Config struct {
 	OldKMSKey          string // --old-kms-key (KMS resource name for old provider)
 }
 
-func Parse() *Config {
+func Parse() (*Config, error) {
+	return ParseArgs(os.Args[1:], os.Stderr)
+}
+
+func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 	c := &Config{}
-	fs := flag.NewFlagSet("pulumi-backend", flag.ExitOnError)
+	fs := flag.NewFlagSet("pulumi-backend", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 
 	// Core flags.
 	fs.StringVar(&c.Addr, "addr", ":8080", "listen address")
@@ -204,25 +210,25 @@ func Parse() *Config {
 	fs.StringVar(&c.OldKMSKey, "old-kms-key", "", "previous GCP KMS key resource name (for --migrate-secrets-key with gcpkms)")
 
 	// Parse flags and env vars (flag > env > default).
-	if err := ff.Parse(fs, os.Args[1:], ff.WithEnvVarPrefix("PULUMI_BACKEND")); err != nil {
-		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
-		os.Exit(1)
+	if err := ff.Parse(fs, args, ff.WithEnvVarPrefix("PULUMI_BACKEND")); err != nil {
+		return nil, fmt.Errorf("configuration error: %w", err)
 	}
 
 	// Auto-generate master key if not provided (local secrets provider only, non-migration mode).
 	if c.MasterKey == "" && c.SecretsProvider == "local" && !c.MigrateSecretsKey {
 		key := make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to generate master key: %v\n", err)
-			os.Exit(1)
+			return nil, fmt.Errorf("failed to generate master key: %w", err)
 		}
 		c.MasterKey = hex.EncodeToString(key)
 		h := sha256.Sum256([]byte(c.MasterKey))
-		fmt.Fprintf(os.Stderr, "WARNING: auto-generated master key (fingerprint: %s). Will not survive restart.\n", hex.EncodeToString(h[:8]))
-		fmt.Fprintf(os.Stderr, "  Set PULUMI_BACKEND_MASTER_KEY to persist it.\n\n")
+		if warningWriter != nil {
+			fmt.Fprintf(warningWriter, "WARNING: auto-generated master key (fingerprint: %s). Will not survive restart.\n", hex.EncodeToString(h[:8]))
+			fmt.Fprintf(warningWriter, "  Set PULUMI_BACKEND_MASTER_KEY to persist it.\n\n")
+		}
 	}
 
-	return c
+	return c, nil
 }
 
 func (c *Config) MasterKeyBytes() ([]byte, error) {

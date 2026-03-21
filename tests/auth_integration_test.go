@@ -29,54 +29,11 @@ import (
 func startBackendWithOpts(t *testing.T, opts ...api.ServerOption) *testBackend {
 	t.Helper()
 
-	disableAuditForTest(t)
-
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "test.db")
-
-	store, err := storage.NewSQLiteStore(dbPath, storage.SQLiteStoreConfig{})
-	if err != nil {
-		t.Fatalf("failed to open database: %v", err)
-	}
-
 	masterKey := make([]byte, 32)
-	provider, err := engine.NewLocalSecretsProvider(masterKey)
-	if err != nil {
-		t.Fatalf("failed to create secrets provider: %v", err)
-	}
-	secrets := engine.NewSecretsEngine(provider)
-
-	mgr, err := engine.NewManager(store, secrets, engine.ManagerConfig{})
-	if err != nil {
-		t.Fatalf("failed to create engine: %v", err)
-	}
-
-	srv := api.NewServer(mgr, "organization", "test-user", opts...)
-	router := srv.Router()
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to listen: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-
-	httpServer := &http.Server{Handler: router, ReadHeaderTimeout: 10 * time.Second} //nolint:gosec // test server
-	go func() { _ = httpServer.Serve(listener) }()
-
-	tb := &testBackend{
-		URL:     fmt.Sprintf("http://127.0.0.1:%d", port),
-		server:  httpServer,
-		store:   store,
-		dataDir: dataDir,
-		dbPath:  dbPath,
-	}
-
-	t.Cleanup(func() {
-		_ = httpServer.Shutdown(context.Background())
-		store.Close()
-	})
-
-	waitForBackend(t, tb.URL)
+	tb := startBackendFixture(t, dbPath, masterKey, backendConfig{serverOpts: opts})
+	tb.dataDir = dataDir
 	return tb
 }
 
