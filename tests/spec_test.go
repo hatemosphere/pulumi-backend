@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hatemosphere/pulumi-backend/internal/api"
 )
@@ -20,7 +21,8 @@ import (
 // so strict 3.0 validation is skipped (huma extensions like contentMediaType
 // are valid in 3.1 but not recognized by kin-openapi's 3.0 validator).
 func TestOpenAPISpecSelfConsistency(t *testing.T) {
-	spec := api.BuildOpenAPISpec()
+	spec, err := api.BuildOpenAPISpec()
+	require.NoError(t, err)
 
 	// Verify it has paths.
 	if spec.Paths.Len() == 0 {
@@ -58,7 +60,8 @@ func TestAPISpecCoverage(t *testing.T) {
 	}
 
 	// --- Build our spec ---
-	ours := api.BuildOpenAPISpec()
+	ours, err := api.BuildOpenAPISpec()
+	require.NoError(t, err)
 
 	// --- Collect endpoints from both specs ---
 	upstreamSet := collectEndpoints(upstream)
@@ -190,7 +193,8 @@ func TestAPISpecSchemaCompliance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load upstream spec: %v", err)
 	}
-	ours := api.BuildOpenAPISpec()
+	ours, err := api.BuildOpenAPISpec()
+	require.NoError(t, err)
 
 	// We only compare endpoints that use a single update kind as a representative,
 	// since all 4 kinds (preview/update/refresh/destroy) share the same schema.

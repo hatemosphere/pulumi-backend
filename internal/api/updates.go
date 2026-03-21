@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -47,10 +48,13 @@ func sanitizeError(err error) string {
 		}
 	}
 	// Catch file paths (common prefixes).
-	for _, prefix := range []string{"/opt/", "/home/", "/tmp/", "/var/", "/etc/", "/usr/"} {
+	for _, prefix := range []string{"/Users/", "/opt/", "/home/", "/tmp/", "/var/", "/etc/", "/usr/"} {
 		if strings.Contains(msg, prefix) {
 			return "internal error"
 		}
+	}
+	if containsAbsolutePath(msg) {
+		return "internal error"
 	}
 	if uuidPattern.MatchString(msg) {
 		return "internal error"
@@ -62,27 +66,67 @@ func sanitizeError(err error) string {
 	return msg
 }
 
+var windowsPathPattern = regexp.MustCompile(`[A-Za-z]:\\`)
+
+func containsAbsolutePath(msg string) bool {
+	if windowsPathPattern.MatchString(msg) {
+		return true
+	}
+
+	for _, field := range strings.FieldsFunc(msg, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\r', ',', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\'':
+			return true
+		default:
+			return false
+		}
+	}) {
+		if filepath.IsAbs(field) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func registerUpdateCreateRoute(s *Server, api huma.API, kind string) {
+	huma.Register(api, huma.Operation{
+		OperationID:  "create" + ucfirst(kind),
+		Method:       http.MethodPost,
+		Path:         "/api/stacks/{orgName}/{projectName}/{stackName}/" + kind,
+		Tags:         []string{"Updates"},
+		MaxBodyBytes: 1 << 20, // 1MB
+		Errors:       []int{409},
+	}, func(ctx context.Context, input *CreateUpdateInput) (*CreateUpdateOutput, error) {
+		result, err := s.engine.CreateUpdate(ctx, input.OrgName, input.ProjectName, input.StackName, kind, input.Body.Config, input.Body.Metadata)
+		if err != nil {
+			return nil, conflictError(err)
+		}
+		out := &CreateUpdateOutput{}
+		out.Body.UpdateID = result.UpdateID
+		out.Body.RequiredPolicies = []RequiredPolicy{}
+		out.Body.Messages = []Message{}
+		return out, nil
+	})
+}
+
+func registerCheckpointRoute[T any](api huma.API, op huma.Operation, metricLabel string, save func(context.Context, *T) (int, error)) {
+	huma.Register(api, op, func(ctx context.Context, input *T) (*struct{}, error) {
+		size, err := save(ctx, input)
+		if err != nil {
+			return nil, conflictOrInternalError(err)
+		}
+		if size > 0 {
+			checkpointBytes.WithLabelValues(metricLabel).Observe(float64(size))
+		}
+		return nil, nil
+	})
+}
+
 func (s *Server) registerUpdates(api huma.API) {
 	// --- Create update (4 kinds) ---
 	for _, kind := range []string{"preview", "update", "refresh", "destroy"} {
-		huma.Register(api, huma.Operation{
-			OperationID:  "create" + ucfirst(kind),
-			Method:       http.MethodPost,
-			Path:         "/api/stacks/{orgName}/{projectName}/{stackName}/" + kind,
-			Tags:         []string{"Updates"},
-			MaxBodyBytes: 1 << 20, // 1MB
-			Errors:       []int{409},
-		}, func(ctx context.Context, input *CreateUpdateInput) (*CreateUpdateOutput, error) {
-			result, err := s.engine.CreateUpdate(ctx, input.OrgName, input.ProjectName, input.StackName, kind, input.Body.Config, input.Body.Metadata)
-			if err != nil {
-				return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
-			}
-			out := &CreateUpdateOutput{}
-			out.Body.UpdateID = result.UpdateID
-			out.Body.RequiredPolicies = []RequiredPolicy{}
-			out.Body.Messages = []Message{}
-			return out, nil
-		})
+		registerUpdateCreateRoute(s, api, kind)
 	}
 
 	// --- Start update ---
@@ -95,7 +139,7 @@ func (s *Server) registerUpdates(api huma.API) {
 	}, func(ctx context.Context, input *StartUpdateInput) (*StartUpdateOutput, error) {
 		result, err := s.engine.StartUpdate(ctx, input.UpdateID, input.Body.Tags, input.Body.JournalVersion)
 		if err != nil {
-			return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
+			return nil, conflictError(err)
 		}
 		out := &StartUpdateOutput{}
 		out.Body.Version = result.Version
@@ -183,14 +227,14 @@ func (s *Server) registerUpdates(api huma.API) {
 	}, func(ctx context.Context, input *CancelUpdateInput) (*struct{}, error) {
 		err := s.engine.CancelUpdate(ctx, input.OrgName, input.ProjectName, input.StackName)
 		if err != nil {
-			return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
+			return nil, conflictError(err)
 		}
 		return nil, nil
 	})
 
 	// --- Checkpoints ---
 
-	huma.Register(api, huma.Operation{
+	registerCheckpointRoute(api, huma.Operation{
 		OperationID:   "patchCheckpoint",
 		Method:        http.MethodPatch,
 		Path:          "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/checkpoint",
@@ -198,9 +242,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		MaxBodyBytes:  64 << 20,
 		DefaultStatus: 200,
 		Errors:        []int{409},
-	}, func(ctx context.Context, input *PatchCheckpointInput) (*struct{}, error) {
+	}, "full", func(ctx context.Context, input *PatchCheckpointInput) (int, error) {
 		if input.Body.IsInvalid {
-			return nil, nil
+			return 0, nil
 		}
 
 		envelope := map[string]any{
@@ -214,13 +258,12 @@ func (s *Server) registerUpdates(api huma.API) {
 
 		err := s.engine.SaveCheckpoint(ctx, input.UpdateID, full)
 		if err != nil {
-			return nil, conflictOrInternalError(err)
+			return 0, err
 		}
-		checkpointBytes.WithLabelValues("full").Observe(float64(len(full)))
-		return nil, nil
+		return len(full), nil
 	})
 
-	huma.Register(api, huma.Operation{
+	registerCheckpointRoute(api, huma.Operation{
 		OperationID:   "patchCheckpointVerbatim",
 		Method:        http.MethodPatch,
 		Path:          "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/checkpointverbatim",
@@ -228,16 +271,15 @@ func (s *Server) registerUpdates(api huma.API) {
 		MaxBodyBytes:  64 << 20,
 		DefaultStatus: 200,
 		Errors:        []int{409},
-	}, func(ctx context.Context, input *PatchCheckpointVerbatimInput) (*struct{}, error) {
+	}, "verbatim", func(ctx context.Context, input *PatchCheckpointVerbatimInput) (int, error) {
 		err := s.engine.SaveCheckpoint(ctx, input.UpdateID, input.Body.UntypedDeployment)
 		if err != nil {
-			return nil, conflictOrInternalError(err)
+			return 0, err
 		}
-		checkpointBytes.WithLabelValues("verbatim").Observe(float64(len(input.Body.UntypedDeployment)))
-		return nil, nil
+		return len(input.Body.UntypedDeployment), nil
 	})
 
-	huma.Register(api, huma.Operation{
+	registerCheckpointRoute(api, huma.Operation{
 		OperationID:   "patchCheckpointDelta",
 		Method:        http.MethodPatch,
 		Path:          "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/checkpointdelta",
@@ -245,13 +287,12 @@ func (s *Server) registerUpdates(api huma.API) {
 		MaxBodyBytes:  64 << 20,
 		DefaultStatus: 200,
 		Errors:        []int{409},
-	}, func(ctx context.Context, input *PatchCheckpointDeltaInput) (*struct{}, error) {
+	}, "delta", func(ctx context.Context, input *PatchCheckpointDeltaInput) (int, error) {
 		err := s.engine.SaveCheckpointDelta(ctx, input.UpdateID, input.Body.CheckpointHash, input.Body.DeploymentDelta, input.Body.SequenceNumber)
 		if err != nil {
-			return nil, conflictOrInternalError(err)
+			return 0, err
 		}
-		checkpointBytes.WithLabelValues("delta").Observe(float64(len(input.Body.DeploymentDelta)))
-		return nil, nil
+		return len(input.Body.DeploymentDelta), nil
 	})
 
 	// --- Journal Entries ---

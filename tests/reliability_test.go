@@ -1210,7 +1210,10 @@ func TestDeclaredErrorCodesExercised(t *testing.T) {
 // This catches drift: if someone adds Errors: []int{400} to a new operation but forgets
 // to add a test scenario, this test fails.
 func TestDeclaredErrorCodesCoverage(t *testing.T) {
-	spec := api.BuildOpenAPISpec()
+	spec, err := api.BuildOpenAPISpec()
+	if err != nil {
+		t.Fatalf("build OpenAPI spec: %v", err)
+	}
 
 	// The exhaustive set of (operationID, statusCode) pairs that are tested.
 	// This MUST be kept in sync with TestDeclaredErrorCodesExercised above

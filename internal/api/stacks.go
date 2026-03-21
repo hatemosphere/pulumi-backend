@@ -8,7 +8,49 @@ import (
 	"github.com/segmentio/encoding/json"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
+
+func validateCreateStackInput(input *CreateStackInput) error {
+	if input.Body.StackName == "" {
+		return huma.NewError(http.StatusBadRequest, "stackName is required")
+	}
+	if err := validateName(input.OrgName, "organization"); err != nil {
+		return huma.NewError(http.StatusBadRequest, err.Error())
+	}
+	if err := validateName(input.Body.StackName, "stack"); err != nil {
+		return huma.NewError(http.StatusBadRequest, err.Error())
+	}
+	if err := validateName(input.ProjectName, "project"); err != nil {
+		return huma.NewError(http.StatusBadRequest, err.Error())
+	}
+	return nil
+}
+
+func buildGetStackOutput(st *storage.Stack, activeUpdate *storage.Update) *GetStackOutput {
+	out := &GetStackOutput{}
+	out.Body.OrgName = st.OrgName
+	out.Body.ProjectName = st.ProjectName
+	out.Body.StackName = st.StackName
+	out.Body.Tags = st.Tags
+	out.Body.Version = st.Version
+	if activeUpdate != nil {
+		out.Body.ActiveUpdate = &activeUpdate.ID
+	}
+	return out
+}
+
+func resolveRenameProject(input *RenameStackInput) (string, error) {
+	newProject := input.Body.NewProject
+	if newProject == "" {
+		return input.ProjectName, nil
+	}
+	if err := validateName(newProject, "project"); err != nil {
+		return "", huma.NewError(http.StatusBadRequest, err.Error())
+	}
+	return newProject, nil
+}
 
 // exportStack handles both versioned and unversioned stack export with gzip negotiation.
 func (s *Server) exportStack(ctx context.Context, org, project, stack string, version *int) (*huma.StreamResponse, error) {
@@ -78,22 +120,13 @@ func (s *Server) registerStacks(api huma.API) {
 		Tags:        []string{"Stacks"},
 		Errors:      []int{400, 409},
 	}, func(ctx context.Context, input *CreateStackInput) (*CreateStackOutput, error) {
-		if input.Body.StackName == "" {
-			return nil, huma.NewError(http.StatusBadRequest, "stackName is required")
-		}
-		if err := validateName(input.OrgName, "organization"); err != nil {
-			return nil, huma.NewError(http.StatusBadRequest, err.Error())
-		}
-		if err := validateName(input.Body.StackName, "stack"); err != nil {
-			return nil, huma.NewError(http.StatusBadRequest, err.Error())
-		}
-		if err := validateName(input.ProjectName, "project"); err != nil {
-			return nil, huma.NewError(http.StatusBadRequest, err.Error())
+		if err := validateCreateStackInput(input); err != nil {
+			return nil, err
 		}
 
 		err := s.engine.CreateStack(ctx, input.OrgName, input.ProjectName, input.Body.StackName, nil)
 		if err != nil {
-			return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
+			return nil, conflictError(err)
 		}
 
 		stackOperationsTotal.WithLabelValues("create").Inc()
@@ -116,19 +149,8 @@ func (s *Server) registerStacks(api huma.API) {
 			return nil, huma.NewError(http.StatusNotFound, "stack not found")
 		}
 
-		out := &GetStackOutput{}
-		out.Body.OrgName = st.OrgName
-		out.Body.ProjectName = st.ProjectName
-		out.Body.StackName = st.StackName
-		out.Body.Tags = st.Tags
-		out.Body.Version = st.Version
-
 		activeUpdate, _ := s.engine.GetActiveUpdate(ctx, input.OrgName, input.ProjectName, input.StackName)
-		if activeUpdate != nil {
-			out.Body.ActiveUpdate = &activeUpdate.ID
-		}
-
-		return out, nil
+		return buildGetStackOutput(st, activeUpdate), nil
 	})
 
 	// --- Delete stack ---
@@ -182,14 +204,12 @@ func (s *Server) registerStacks(api huma.API) {
 			return nil, huma.NewError(http.StatusBadRequest, err.Error())
 		}
 
-		newProject := input.Body.NewProject
-		if newProject == "" {
-			newProject = input.ProjectName
-		} else if err := validateName(newProject, "project"); err != nil {
-			return nil, huma.NewError(http.StatusBadRequest, err.Error())
+		newProject, err := resolveRenameProject(input)
+		if err != nil {
+			return nil, err
 		}
 
-		err := s.engine.RenameStack(ctx, input.OrgName, input.ProjectName, input.StackName, newProject, input.Body.NewName)
+		err = s.engine.RenameStack(ctx, input.OrgName, input.ProjectName, input.StackName, newProject, input.Body.NewName)
 		if err != nil {
 			if strings.Contains(err.Error(), "already exists") {
 				return nil, huma.NewError(http.StatusConflict, "a stack with that name already exists")
@@ -241,7 +261,7 @@ func (s *Server) registerStacks(api huma.API) {
 
 		result, err := s.engine.CreateUpdate(ctx, input.OrgName, input.ProjectName, input.StackName, "import", nil, nil)
 		if err != nil {
-			return nil, huma.NewError(http.StatusConflict, sanitizeError(err))
+			return nil, conflictError(err)
 		}
 
 		_, err = s.engine.StartUpdate(ctx, result.UpdateID, nil, 0)

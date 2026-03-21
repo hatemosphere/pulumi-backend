@@ -44,11 +44,16 @@ func internalError(err error) error {
 	return huma.NewError(http.StatusInternalServerError, sanitizeError(err))
 }
 
+// conflictError returns a 409 error with a sanitized message.
+func conflictError(err error) error {
+	return huma.NewError(http.StatusConflict, sanitizeError(err))
+}
+
 // conflictOrInternalError returns a 409 for engine state-conflict sentinels,
 // otherwise a 500.
 func conflictOrInternalError(err error) error {
 	if isConflictError(err) {
-		return huma.NewError(http.StatusConflict, sanitizeError(err))
+		return conflictError(err)
 	}
 	return internalError(err)
 }

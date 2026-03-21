@@ -19,8 +19,6 @@ import (
 
 	"github.com/hatemosphere/pulumi-backend/internal/api"
 	"github.com/hatemosphere/pulumi-backend/internal/audit"
-	"github.com/hatemosphere/pulumi-backend/internal/auth"
-	"github.com/hatemosphere/pulumi-backend/internal/backup"
 	"github.com/hatemosphere/pulumi-backend/internal/config"
 	"github.com/hatemosphere/pulumi-backend/internal/engine"
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
@@ -41,7 +39,15 @@ var (
 )
 
 func main() {
-	cfg := config.Parse()
+	cfg, err := config.Parse()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := validateRuntimeConfig(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Configure logging format.
 	var logHandler slog.Handler
@@ -85,9 +91,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to open database: %v\n", err)
 		os.Exit(1)
 	}
+	defer store.Close()
 
 	// Create secrets provider.
-	secretsProvider := createSecretsProvider(cfg)
+	secretsProvider, err := buildSecretsProvider(context.Background(), cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create secrets provider: %v\n", err)
+		os.Exit(1)
+	}
 	if closer, ok := secretsProvider.(interface{ Close() error }); ok {
 		defer closer.Close()
 	}
@@ -144,19 +155,10 @@ func main() {
 	secrets := engine.NewSecretsEngine(secretsProvider)
 
 	// Set up backup provider from destination URI.
-	var backupProviders []backup.Provider
-	if cfg.BackupDestination != "" {
-		provider, provErr := backup.ResolveDestination(context.Background(), cfg.BackupDestination, backup.S3Options{
-			Region:         cfg.BackupS3Region,
-			Endpoint:       cfg.BackupS3Endpoint,
-			ForcePathStyle: cfg.BackupS3ForcePathStyle,
-		})
-		if provErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to create backup provider: %v\n", provErr)
-			os.Exit(1)
-		}
-		backupProviders = append(backupProviders, provider)
-		slog.Info("backup enabled", "destination", cfg.BackupDestination)
+	backupProviders, err := buildBackupProviders(context.Background(), cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create backup provider: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Create engine manager.
@@ -181,160 +183,17 @@ func main() {
 	})
 
 	// Create API server.
-	serverOpts := []api.ServerOption{
-		api.WithDeltaCutoff(cfg.DeltaCutoffBytes),
-		api.WithHistoryPageSize(cfg.HistoryPageSize),
-		api.WithAuthMode(cfg.AuthMode),
-	}
-	if cfg.PublicURL != "" {
-		serverOpts = append(serverOpts, api.WithPublicURL(cfg.PublicURL))
-		slog.Info("public URL configured", "url", cfg.PublicURL)
-	}
-	if cfg.PprofEnabled {
-		serverOpts = append(serverOpts, api.WithPprof())
-	}
-	if cfg.TrustedProxies != "" {
-		proxies, err := api.ParseTrustedProxies(cfg.TrustedProxies)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid trusted-proxies: %v\n", err)
-			os.Exit(1)
-		}
-		serverOpts = append(serverOpts, api.WithTrustedProxies(proxies))
-		slog.Info("trusted proxies configured", "cidrs", cfg.TrustedProxies)
-	}
-
-	switch cfg.AuthMode {
-	case "google":
-		if cfg.GoogleClientID == "" {
-			fmt.Fprintf(os.Stderr, "google-client-id is required when auth-mode=google\n")
-			os.Exit(1)
-		}
-
-		serverOpts = append(serverOpts, api.WithTokenStore(store))
-
-		// Set up Google groups resolver if admin email is configured.
-		var groupsCache *auth.GroupsCache
-		if cfg.GoogleAdminEmail != "" {
-			resolver, err := auth.NewGroupsResolver(
-				context.Background(), cfg.GoogleSAKeyFile, cfg.GoogleSAEmail, cfg.GoogleAdminEmail, cfg.GoogleTransitiveGroups,
-			)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "failed to create groups resolver: %v\n", err)
-				os.Exit(1)
-			}
-			groupsCache = auth.NewGroupsCache(resolver, cfg.GroupsCacheTTL)
-			slog.Info("google groups resolution enabled",
-				"admin_email", cfg.GoogleAdminEmail,
-				"transitive", cfg.GoogleTransitiveGroups,
-			)
-		}
-
-		allowedDomains := parseCSVList(cfg.GoogleAllowedDomains)
-
-		oidcAuth, err := auth.NewGoogleOIDCAuthenticator(context.Background(), auth.OIDCConfig{
-			ClientID:       cfg.GoogleClientID,
-			AllowedDomains: allowedDomains,
-			TokenTTL:       cfg.TokenTTL,
-		}, cfg.GoogleClientSecret, groupsCache)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to create Google OIDC authenticator: %v\n", err)
-			os.Exit(1)
-		}
-
-		serverOpts = append(serverOpts, api.WithOIDCAuth(oidcAuth))
-		if groupsCache != nil {
-			serverOpts = append(serverOpts, api.WithGroupsCache(groupsCache))
-		}
-		slog.Info("auth mode: google", "client_id", cfg.GoogleClientID)
-
-	case "oidc":
-		if cfg.OIDCIssuer == "" || cfg.OIDCClientID == "" || cfg.OIDCClientSecret == "" {
-			fmt.Fprintf(os.Stderr, "oidc-issuer, oidc-client-id, and oidc-client-secret are required when auth-mode=oidc\n")
-			os.Exit(1)
-		}
-
-		serverOpts = append(serverOpts, api.WithTokenStore(store))
-
-		allowedDomains := parseCSVList(cfg.OIDCAllowedDomains)
-		scopes := parseCSVList(cfg.OIDCScopes)
-
-		oidcAuth, err := auth.NewOIDCAuthenticator(context.Background(), auth.OIDCConfig{
-			ClientID:       cfg.OIDCClientID,
-			AllowedDomains: allowedDomains,
-			TokenTTL:       cfg.TokenTTL,
-			ProviderName:   cfg.OIDCProviderName,
-			Scopes:         scopes,
-			GroupsClaim:    cfg.OIDCGroupsClaim,
-			UsernameClaim:  cfg.OIDCUsernameClaim,
-		}, cfg.OIDCIssuer, cfg.OIDCClientSecret, nil)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to create OIDC authenticator: %v\n", err)
-			os.Exit(1)
-		}
-
-		serverOpts = append(serverOpts, api.WithOIDCAuth(oidcAuth))
-		slog.Info("auth mode: oidc",
-			"issuer", cfg.OIDCIssuer,
-			"client_id", cfg.OIDCClientID,
-			"provider_name", cfg.OIDCProviderName,
-		)
-
-	case "jwt":
-		if cfg.JWTSigningKey == "" {
-			fmt.Fprintf(os.Stderr, "jwt-signing-key is required when auth-mode=jwt\n")
-			os.Exit(1)
-		}
-		jwtAuth, err := auth.NewJWTAuthenticator(auth.JWTConfig{
-			SigningKey:    cfg.JWTSigningKey,
-			Issuer:        cfg.JWTIssuer,
-			Audience:      cfg.JWTAudience,
-			GroupsClaim:   cfg.JWTGroupsClaim,
-			UsernameClaim: cfg.JWTUsernameClaim,
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to create JWT authenticator: %v\n", err)
-			os.Exit(1)
-		}
-		serverOpts = append(serverOpts, api.WithJWTAuth(jwtAuth))
-		slog.Info("auth mode: jwt",
-			"issuer", cfg.JWTIssuer,
-			"audience", cfg.JWTAudience,
-			"username_claim", cfg.JWTUsernameClaim,
-			"groups_claim", cfg.JWTGroupsClaim,
-		)
-	}
-
-	// Load RBAC config if provided.
-	if cfg.RBACConfigPath != "" {
-		rbacCfg, err := auth.LoadRBACConfig(cfg.RBACConfigPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to load RBAC config: %v\n", err)
-			os.Exit(1)
-		}
-		rbacResolver, err := auth.NewRBACResolver(rbacCfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid RBAC config: %v\n", err)
-			os.Exit(1)
-		}
-		serverOpts = append(serverOpts, api.WithRBAC(rbacResolver))
-		slog.Info("RBAC enabled", "config", cfg.RBACConfigPath)
+	serverOpts, err := buildServerOptions(context.Background(), cfg, store)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to build server options: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Initialize OpenTelemetry tracing if configured.
-	var tp *sdktrace.TracerProvider
-	if cfg.OTelServiceName != "" {
-		var initErr error
-		tp, initErr = initTracer(context.Background(), cfg.OTelServiceName)
-		if initErr != nil {
-			fmt.Fprintf(os.Stderr, "failed to initialize OpenTelemetry: %v\n", initErr)
-			os.Exit(1)
-		}
-		slog.Info("OpenTelemetry tracing enabled", "service", cfg.OTelServiceName)
-	}
-
-	// When management-addr is set, health/metrics move to a separate server.
-	if cfg.ManagementAddr != "" {
-		serverOpts = append(serverOpts, api.WithSkipManagementRoutes())
+	tp, err := initializeTracer(context.Background(), cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize OpenTelemetry: %v\n", err)
+		os.Exit(1)
 	}
 
 	srv := api.NewServer(mgr, cfg.DefaultOrg, cfg.DefaultUser, serverOpts...)
@@ -430,7 +289,6 @@ func main() {
 			slog.Error("tracer provider shutdown error", "error", err)
 		}
 	}
-	store.Close()
 	slog.Info("shutdown complete")
 }
 
@@ -443,36 +301,6 @@ func parseCSVList(s string) []string {
 		}
 	}
 	return result
-}
-
-// createSecretsProvider builds the secrets provider from config. Exits on error.
-func createSecretsProvider(cfg *config.Config) engine.SecretsProvider {
-	switch cfg.SecretsProvider {
-	case "gcpkms":
-		if cfg.KMSKeyResourceName == "" {
-			fmt.Fprintf(os.Stderr, "GCP KMS key resource name is required when secrets-provider=gcpkms\n")
-			os.Exit(1)
-		}
-		kmsProvider, err := engine.NewKMSSecretsProvider(context.Background(), cfg.KMSKeyResourceName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to create KMS secrets provider: %v\n", err)
-			os.Exit(1)
-		}
-		slog.Info("secrets provider: GCP KMS", "key", cfg.KMSKeyResourceName)
-		return kmsProvider
-	default: // "local"
-		masterKey, err := cfg.MasterKeyBytes()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid master key: %v\n", err)
-			os.Exit(1)
-		}
-		localProvider, err := engine.NewLocalSecretsProvider(masterKey)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to create local secrets provider: %v\n", err)
-			os.Exit(1)
-		}
-		return localProvider
-	}
 }
 
 // canaryPlaintext is a known value used to verify the secrets provider on startup.
@@ -536,28 +364,6 @@ func verifyNewProvider(provider engine.SecretsProvider) error {
 		return errors.New("round-trip mismatch: decrypted value does not match original")
 	}
 	return nil
-}
-
-// buildOldSecretsProvider constructs a SecretsProvider from the --old-* flags.
-func buildOldSecretsProvider(cfg *config.Config) (engine.SecretsProvider, error) {
-	switch cfg.OldSecretsProvider {
-	case "gcpkms":
-		if cfg.OldKMSKey == "" {
-			return nil, errors.New("--old-kms-key is required when --old-secrets-provider=gcpkms")
-		}
-		return engine.NewKMSSecretsProvider(context.Background(), cfg.OldKMSKey)
-	case "local":
-		if cfg.OldMasterKey == "" {
-			return nil, errors.New("--old-master-key is required when --old-secrets-provider=local")
-		}
-		key, err := hex.DecodeString(cfg.OldMasterKey)
-		if err != nil {
-			return nil, fmt.Errorf("invalid --old-master-key: %w", err)
-		}
-		return engine.NewLocalSecretsProvider(key)
-	default:
-		return nil, fmt.Errorf("--old-secrets-provider must be 'local' or 'gcpkms', got %q", cfg.OldSecretsProvider)
-	}
 }
 
 // initTracer sets up an OTLP gRPC trace exporter and returns the TracerProvider.
