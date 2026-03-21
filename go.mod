@@ -17,7 +17,7 @@ require (
 	github.com/grafana/s3-mock v0.2.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/klauspost/compress v1.18.5
-	github.com/ncruces/go-sqlite3 v0.32.0
+	github.com/ncruces/go-sqlite3 v0.33.0
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/segmentio/encoding v0.5.4
