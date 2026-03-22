@@ -681,7 +681,7 @@ func startManagementServer(mgr *engine.Manager, cfg *config.Config) *http.Server
 		mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
 		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
 		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
-		slog.Info("pprof profiling endpoints enabled on management server at /debug/pprof/")
+		slog.Info("pprof enabled on management server")
 	}
 
 	srv := &http.Server{

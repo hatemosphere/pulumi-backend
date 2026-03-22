@@ -262,7 +262,7 @@ func (s *Server) Router() http.Handler {
 		mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
 		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
 		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
-		slog.Info("pprof profiling endpoints enabled at /debug/pprof/")
+		slog.Info("pprof enabled")
 	}
 
 	// HTTP-level middleware (outermost applied last).

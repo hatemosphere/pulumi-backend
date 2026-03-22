@@ -22,7 +22,7 @@ import (
 // registerLogin registers browser-based login routes on a huma API.
 // Uses StreamResponse so handlers can serve HTML, set cookies, and redirect.
 func (s *Server) registerLogin(api huma.API) {
-	slog.Info("registering login routes", "routes", []string{"/login", "/login/callback", "/cli-login", "/welcome/cli"})
+	slog.Info("login routes registered")
 
 	// --- Login page ---
 	huma.Register(api, huma.Operation{
@@ -50,7 +50,7 @@ func (s *Server) registerLogin(api huma.API) {
 					"AuthURL":      authURL,
 					"ProviderName": s.oidcAuth.Config().ProviderName,
 				}); err != nil {
-					slog.Error("render login page", "error", err)
+					slog.Error("failed to render login page", "error", err)
 				}
 			},
 		}, nil
@@ -123,7 +123,7 @@ func (s *Server) registerLogin(api huma.API) {
 			Body: func(ctx huma.Context) {
 				ctx.SetHeader("Content-Type", "text/html; charset=utf-8")
 				if err := welcomePageTmpl.Execute(ctx.BodyWriter(), nil); err != nil {
-					slog.Error("render welcome page", "error", err)
+					slog.Error("failed to render welcome page", "error", err)
 				}
 			},
 		}, nil
@@ -243,7 +243,7 @@ func (s *Server) handleLoginCallbackHuma(hCtx huma.Context, goCtx context.Contex
 		"Token":    result.Token,
 		"LoginURL": loginURL,
 	}); err != nil {
-		slog.Error("render callback page", "error", err)
+		slog.Error("failed to render callback page", "error", err)
 	}
 }
 
@@ -297,7 +297,7 @@ func (s *Server) loginRedirectURI(ctx huma.Context) string {
 	if s.publicURL != "" {
 		return s.publicURL + "/login/callback"
 	}
-	slog.Warn("public-url not set, using Host header for redirect URI (set --public-url to avoid Host header attacks)")
+	slog.Warn("public-url not set, using Host header for redirect URI")
 	scheme := schemeFromCtx(ctx)
 	return fmt.Sprintf("%s://%s/login/callback", scheme, ctx.Host())
 }
@@ -368,7 +368,7 @@ func renderHTMLError(ctx huma.Context, msg string) {
 
 func renderErrorToWriter(w io.Writer, msg string) {
 	if err := errorPageTmpl.Execute(w, map[string]string{"Error": msg}); err != nil {
-		slog.Error("render error page", "error", err)
+		slog.Error("failed to render error page", "error", err)
 	}
 }
 

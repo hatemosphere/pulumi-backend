@@ -65,13 +65,13 @@ This backend speaks the Pulumi Cloud HTTP protocol. The CLI uses the `httpstate`
 
 ```bash
 go build -o pulumi-backend ./cmd/pulumi-backend
-./pulumi-backend
+./pulumi-backend --single-tenant-token=YOUR_SECRET_TOKEN
 ```
 
 Then point the CLI at it:
 
 ```bash
-pulumi login http://localhost:8080
+PULUMI_ACCESS_TOKEN=YOUR_SECRET_TOKEN pulumi login http://localhost:8080
 ```
 
 With OIDC auth (Google, Okta, Entra ID, Keycloak, etc.), set `PULUMI_CONSOLE_DOMAIN` for automatic browser-based login (no token copy-paste):
@@ -94,14 +94,33 @@ All flags have corresponding environment variables with the `PULUMI_BACKEND_` pr
 | `-master-key` | `PULUMI_BACKEND_MASTER_KEY` | (auto-generated) | Hex-encoded 32-byte key for secrets encryption |
 | `-org` | `PULUMI_BACKEND_ORG` | `organization` | Default organization name |
 | `-user` | `PULUMI_BACKEND_USER` | `admin` | Default user name |
-| `-tls` | `PULUMI_BACKEND_TLS` | `false` | Enable TLS |
+| `-tls` | `PULUMI_BACKEND_TLS` | `false` | Enable TLS (manual cert/key) |
 | `-cert` | `PULUMI_BACKEND_CERT` | | TLS certificate file |
 | `-key` | `PULUMI_BACKEND_KEY` | | TLS key file |
+| `-acme-domain` | `PULUMI_BACKEND_ACME_DOMAIN` | | Domain for automatic TLS via ACME/Let's Encrypt |
+| `-acme-email` | `PULUMI_BACKEND_ACME_EMAIL` | | Contact email for ACME account |
+| `-acme-ca` | `PULUMI_BACKEND_ACME_CA` | Let's Encrypt | ACME directory URL (for custom CAs) |
+| `-single-tenant-token` | `PULUMI_BACKEND_SINGLE_TENANT_TOKEN` | | **Required.** Shared access token for single-tenant mode |
 | `-public-url` | `PULUMI_BACKEND_PUBLIC_URL` | | Public base URL for redirect URIs (e.g. `https://pulumi.example.com`) |
 
 If no master key is provided, one is auto-generated and printed to stderr. **You must persist it** (e.g. `export PULUMI_BACKEND_MASTER_KEY=...`) — secrets will be undecryptable on restart with a different key.
 
 On startup, the backend verifies the master key by decrypting a canary value stored in the database. If the key is wrong, the server refuses to start with a clear error message instead of silently corrupting secrets.
+
+#### Automatic TLS (ACME / Let's Encrypt)
+
+Set `-acme-domain` to enable automatic certificate provisioning via Let's Encrypt (or any ACME CA). Certificates are stored in SQLite alongside all other data — no separate cert directory needed. Renewal is automatic (30 days before expiry).
+
+```bash
+./pulumi-backend \
+  --acme-domain=pulumi.example.com \
+  --acme-email=ops@example.com \
+  --addr=:443 \
+  --single-tenant-token=YOUR_TOKEN \
+  --management-addr=:9090
+```
+
+Requirements: ports 80 (HTTP-01 challenge) and 443 must be reachable. The domain must resolve to the server's IP. Mutually exclusive with `-tls`/`-cert`/`-key`.
 
 #### Logging
 
@@ -126,8 +145,8 @@ In Kubernetes, all three go to stdout as structured JSON. Use Fluent Bit/Vector/
 
 | Flag | Env | Default | Description |
 |---|---|---|---|
-| `-pprof` | `PULUMI_BACKEND_PPROF` | `false` | Enable pprof profiling endpoints on the management listener |
-| `-management-addr` | `PULUMI_BACKEND_MANAGEMENT_ADDR` | (disabled) | Separate listen address for `/healthz`, `/readyz`, `/metrics` (e.g., `:9090`) |
+| `-pprof` | `PULUMI_BACKEND_PPROF` | `false` | Enable pprof profiling endpoints (requires `-management-addr`) |
+| `-management-addr` | `PULUMI_BACKEND_MANAGEMENT_ADDR` | (disabled) | Separate listen address for `/healthz`, `/readyz`, `/metrics`, `/debug/pprof/` (e.g., `:9090`). **Required** when binding to non-loopback addresses. |
 | `-otel-service-name` | `PULUMI_BACKEND_OTEL_SERVICE_NAME` | (disabled) | OpenTelemetry service name (enables OTLP tracing) |
 
 #### Performance tuning
@@ -218,10 +237,11 @@ Four auth modes: `single-tenant` (default), `google`, `oidc`, and `jwt`.
 | Flag | Env | Default | Description |
 |---|---|---|---|
 | `-auth-mode` | `PULUMI_BACKEND_AUTH_MODE` | `single-tenant` | `single-tenant`, `google`, `oidc`, or `jwt` |
-| `-single-tenant-token` | `PULUMI_BACKEND_SINGLE_TENANT_TOKEN` | | Shared access token for `single-tenant` mode |
-| `-rbac-config` | `PULUMI_BACKEND_RBAC_CONFIG` | | Path to RBAC config YAML |
+| `-single-tenant-token` | `PULUMI_BACKEND_SINGLE_TENANT_TOKEN` | | **Required** for single-tenant mode. Shared access token. |
+| `-rbac-config` | `PULUMI_BACKEND_RBAC_CONFIG` | | **Required** for google/oidc/jwt modes. Path to RBAC config YAML. |
+| `-trusted-proxies` | `PULUMI_BACKEND_TRUSTED_PROXIES` | (trust none) | Comma-separated CIDRs for trusted reverse proxies |
 
-`single-tenant` uses a single shared access token for all users. Requests must send `Authorization: token <shared-token>`, and successful requests run as the configured default user with admin access.
+`single-tenant` requires a configured token (`-single-tenant-token`). Requests must send `Authorization: token <configured-token>`. Token comparison uses constant-time comparison to prevent timing attacks.
 
 For `google`, `oidc`, and `jwt` modes, `-rbac-config` is required so multi-user deployments fail closed instead of granting blanket admin access.
 
@@ -232,6 +252,18 @@ For `google`, `oidc`, and `jwt` modes, `-rbac-config` is required so multi-user 
 - **[JWT setup guide](docs/auth-jwt.md)** — HMAC/RSA/ECDSA, Dex, Keycloak integration
 - **[RBAC configuration](docs/rbac.md)** — Group roles, stack policies, permission levels
 - **[Performance testing](docs/performance.md)** — Benchmarks, pprof profiling, optimization guide
+
+## Security
+
+- **Token auth enforced**: Single-tenant mode requires a configured token (no open access). Constant-time comparison prevents timing attacks.
+- **Refresh token encryption**: OIDC refresh tokens are encrypted at rest using the master key (AES-256-GCM) or GCP KMS.
+- **Secrets at rest**: Per-stack data encryption keys (DEKs) wrapped by master key. Stack secret values encrypted client-side by the CLI.
+- **Master key canary**: Wrong key = immediate startup failure, not silent corruption.
+- **Trusted proxies**: `X-Forwarded-For`/`X-Real-Ip` headers only accepted from explicitly configured CIDRs (default: trust none).
+- **Management port separation**: Health probes, metrics, and pprof are served on a separate port, not exposed on the public API.
+- **HTTP server hardening**: Read/write/idle timeouts configured on all listeners to prevent slowloris and resource exhaustion.
+- **Error sanitization**: Internal errors (SQL, file paths, UUIDs) are scrubbed before reaching clients.
+- **ACME cert storage**: TLS certificates stored in SQLite (included in backups), not on the filesystem.
 
 ## API compatibility
 
@@ -259,6 +291,9 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 - OpenAPI 3.1 spec (`GET /api/openapi`)
 - Database backup (`POST /api/admin/backup`) with S3-compatible remote upload, scheduled backups, and retention management
 - Secrets key migration (`--migrate-secrets-key` for local key rotation and local↔KMS migration)
+- Automatic TLS via ACME/Let's Encrypt with SQLite-backed cert cache
+
+Tested against Pulumi CLI v3.227.0.
 
 ## Audit logging
 

@@ -9,13 +9,13 @@ import (
 	"github.com/klauspost/compress/gzip"
 )
 
-var GzipWriterPool = sync.Pool{
+var gzipWriterPool = sync.Pool{
 	New: func() any { return gzip.NewWriter(nil) },
 }
 
-var GzipReaderPool sync.Pool // lazily populated with *gzip.Reader
+var gzipReaderPool sync.Pool // lazily populated with *gzip.Reader
 
-var BufPool = sync.Pool{
+var bufPool = sync.Pool{
 	New: func() any { return new(bytes.Buffer) },
 }
 
@@ -23,23 +23,23 @@ const maxDecompressedSize = 512 * 1024 * 1024 // 512 MB
 
 // Compress gzip-compresses data using pooled writers and buffers.
 func Compress(data []byte) ([]byte, error) {
-	buf := BufPool.Get().(*bytes.Buffer)
+	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	buf.Grow(len(data) / 4)
 
-	gw := GzipWriterPool.Get().(*gzip.Writer)
+	gw := gzipWriterPool.Get().(*gzip.Writer)
 	gw.Reset(buf)
 
 	if _, err := gw.Write(data); err != nil {
 		gw.Reset(nil)
-		GzipWriterPool.Put(gw)
-		BufPool.Put(buf)
+		gzipWriterPool.Put(gw)
+		bufPool.Put(buf)
 		return nil, err
 	}
 	if err := gw.Close(); err != nil {
 		gw.Reset(nil)
-		GzipWriterPool.Put(gw)
-		BufPool.Put(buf)
+		gzipWriterPool.Put(gw)
+		bufPool.Put(buf)
 		return nil, err
 	}
 
@@ -47,8 +47,8 @@ func Compress(data []byte) ([]byte, error) {
 	copy(result, buf.Bytes())
 
 	gw.Reset(nil)
-	GzipWriterPool.Put(gw)
-	BufPool.Put(buf)
+	gzipWriterPool.Put(gw)
+	bufPool.Put(buf)
 	return result, nil
 }
 
@@ -57,7 +57,7 @@ func Decompress(data []byte) ([]byte, error) {
 	reader := bytes.NewReader(data)
 
 	var gr *gzip.Reader
-	if pooled, ok := GzipReaderPool.Get().(*gzip.Reader); ok && pooled != nil {
+	if pooled, ok := gzipReaderPool.Get().(*gzip.Reader); ok && pooled != nil {
 		gr = pooled
 		if err := gr.Reset(reader); err != nil {
 			return nil, err
@@ -73,30 +73,30 @@ func Decompress(data []byte) ([]byte, error) {
 	limit := int64(maxDecompressedSize)
 	limitReader := io.LimitReader(gr, limit+1)
 
-	buf := BufPool.Get().(*bytes.Buffer)
+	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	buf.Grow(len(data) * 4)
 
 	_, err := io.Copy(buf, limitReader)
 	if err != nil {
 		_ = gr.Close()
-		GzipReaderPool.Put(gr)
-		BufPool.Put(buf)
+		gzipReaderPool.Put(gr)
+		bufPool.Put(buf)
 		return nil, err
 	}
 	if int64(buf.Len()) > limit {
 		_ = gr.Close()
-		GzipReaderPool.Put(gr)
-		BufPool.Put(buf)
+		gzipReaderPool.Put(gr)
+		bufPool.Put(buf)
 		return nil, errors.New("decompressed deployment exceeds maximum size of 512MB")
 	}
 
 	_ = gr.Close()
-	GzipReaderPool.Put(gr)
+	gzipReaderPool.Put(gr)
 
 	result := make([]byte, buf.Len())
 	copy(result, buf.Bytes())
-	BufPool.Put(buf)
+	bufPool.Put(buf)
 	return result, nil
 }
 

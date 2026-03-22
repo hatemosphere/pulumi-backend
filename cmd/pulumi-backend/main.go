@@ -27,15 +27,15 @@ var (
 func main() {
 	cfg, err := config.Parse()
 	if err != nil {
-		fatal("%v", err)
+		fatalf("%v", err)
 	}
 	if err := validateRuntimeConfig(cfg); err != nil {
-		fatal("configuration error: %v", err)
+		fatalf("configuration error: %v", err)
 	}
 
 	auditCloser, err := setupLogging(cfg)
 	if err != nil {
-		fatal("logging setup: %v", err)
+		fatalf("logging setup: %v", err)
 	}
 	if auditCloser != nil {
 		defer auditCloser.Close()
@@ -46,13 +46,13 @@ func main() {
 		StackListPageSize: cfg.StackListPageSize,
 	})
 	if err != nil {
-		fatal("failed to open database: %v", err)
+		fatalf("failed to open database: %v", err)
 	}
 	defer store.Close()
 
 	secretsProvider, err := buildSecretsProvider(context.Background(), cfg)
 	if err != nil {
-		fatal("failed to create secrets provider: %v", err)
+		fatalf("failed to create secrets provider: %v", err)
 	}
 	if closer, ok := secretsProvider.(interface{ Close() error }); ok {
 		defer closer.Close()
@@ -65,21 +65,21 @@ func main() {
 
 	if cfg.MigrateSecretsKey {
 		if err := runSecretsMigration(store, cfg, secretsProvider); err != nil {
-			fatal("secrets key migration: %v", err)
+			fatalf("secrets key migration: %v", err)
 		}
 		store.Close()
 		os.Exit(0)
 	}
 
 	if err := verifySecretsProvider(store, secretsProvider); err != nil {
-		fatal("secrets provider verification: %v", err)
+		fatalf("secrets provider verification: %v", err)
 	}
 
 	secrets := engine.NewSecretsEngine(secretsProvider)
 
 	backupProviders, err := buildBackupProviders(context.Background(), cfg)
 	if err != nil {
-		fatal("failed to create backup provider: %v", err)
+		fatalf("failed to create backup provider: %v", err)
 	}
 
 	mgr, err := engine.NewManager(store, secrets, engine.ManagerConfig{
@@ -93,19 +93,19 @@ func main() {
 		BackupRetention:    cfg.BackupRetention,
 	})
 	if err != nil {
-		fatal("failed to create engine: %v", err)
+		fatalf("failed to create engine: %v", err)
 	}
 
 	api.RegisterActiveUpdatesGauge(func() float64 { return float64(mgr.ActiveUpdateCount()) })
 
 	serverOpts, err := buildServerOptions(context.Background(), cfg, store)
 	if err != nil {
-		fatal("failed to build server options: %v", err)
+		fatalf("failed to build server options: %v", err)
 	}
 
 	tp, err := initializeTracer(context.Background(), cfg)
 	if err != nil {
-		fatal("failed to initialize OpenTelemetry: %v", err)
+		fatalf("failed to initialize OpenTelemetry: %v", err)
 	}
 
 	srv := api.NewServer(mgr, cfg.DefaultOrg, cfg.DefaultUser, serverOpts...)
@@ -171,7 +171,7 @@ func main() {
 	slog.Info("shutdown complete")
 }
 
-func fatal(format string, args ...any) {
+func fatalf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
 }
