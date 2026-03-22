@@ -19,6 +19,7 @@ func NewACMECache(store *SQLiteStore) *ACMECache {
 	return &ACMECache{store: store}
 }
 
+// Get implements autocert.Cache.
 func (c *ACMECache) Get(ctx context.Context, key string) ([]byte, error) {
 	val, err := c.store.GetConfig(ctx, "acme:"+key)
 	if err != nil {
@@ -30,10 +31,12 @@ func (c *ACMECache) Get(ctx context.Context, key string) ([]byte, error) {
 	return hex.DecodeString(val)
 }
 
+// Put implements autocert.Cache.
 func (c *ACMECache) Put(ctx context.Context, key string, data []byte) error {
 	return c.store.SetConfig(ctx, "acme:"+key, hex.EncodeToString(data))
 }
 
+// Delete implements autocert.Cache.
 func (c *ACMECache) Delete(ctx context.Context, key string) error {
 	return c.store.DeleteConfig(ctx, "acme:"+key)
 }

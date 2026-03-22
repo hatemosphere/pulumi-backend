@@ -171,12 +171,12 @@ func (m *Manager) Shutdown() {
 	}
 }
 
-// ActiveUpdateCount returns the number of currently active (in-progress) updates.
 // Ping checks that the underlying storage is reachable.
 func (m *Manager) Ping(ctx context.Context) error {
 	return m.store.Ping(ctx)
 }
 
+// ActiveUpdateCount returns the number of currently active (in-progress) updates.
 func (m *Manager) ActiveUpdateCount() int64 {
 	return m.activeUpdates.Load()
 }
@@ -187,6 +187,7 @@ func stackKey(org, project, stack string) string {
 
 // --- Stack Operations ---
 
+// CreateStack creates a new stack with the given tags.
 func (m *Manager) CreateStack(ctx context.Context, org, project, stackName string, tags map[string]string) error {
 	ctx, span := tracer.Start(ctx, "engine.CreateStack",
 		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stackName))))
@@ -202,10 +203,12 @@ func (m *Manager) CreateStack(ctx context.Context, org, project, stackName strin
 	})
 }
 
+// GetStack returns the stack metadata, or nil if not found.
 func (m *Manager) GetStack(ctx context.Context, org, project, stack string) (*storage.Stack, error) {
 	return m.store.GetStack(ctx, org, project, stack)
 }
 
+// DeleteStack removes a stack. If force is false, it rejects deletion when resources remain.
 func (m *Manager) DeleteStack(ctx context.Context, org, project, stack string, force bool) error {
 	ctx, span := tracer.Start(ctx, "engine.DeleteStack",
 		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stack))))
@@ -240,18 +243,22 @@ func (m *Manager) DeleteStack(ctx context.Context, org, project, stack string, f
 	return m.store.DeleteStack(ctx, org, project, stack)
 }
 
+// ListStacks returns a page of stacks with an optional continuation token.
 func (m *Manager) ListStacks(ctx context.Context, org, project, continuationToken string) ([]storage.Stack, string, error) {
 	return m.store.ListStacks(ctx, org, project, continuationToken)
 }
 
+// ProjectExists reports whether any stacks exist under the given project.
 func (m *Manager) ProjectExists(ctx context.Context, org, project string) (bool, error) {
 	return m.store.ProjectExists(ctx, org, project)
 }
 
+// UpdateStackTags replaces the tags on a stack.
 func (m *Manager) UpdateStackTags(ctx context.Context, org, project, stack string, tags map[string]string) error {
 	return m.store.UpdateStackTags(ctx, org, project, stack, tags)
 }
 
+// RenameStack moves a stack to a new project/name, invalidating caches.
 func (m *Manager) RenameStack(ctx context.Context, org, oldProject, oldName, newProject, newName string) error {
 	ctx, span := tracer.Start(ctx, "engine.RenameStack")
 	defer span.End()
@@ -260,8 +267,18 @@ func (m *Manager) RenameStack(ctx context.Context, org, oldProject, oldName, new
 	return m.store.RenameStack(ctx, org, oldProject, oldName, newProject, newName)
 }
 
+// fetchStateRaw returns raw deployment bytes for the given version (or current if nil).
+func (m *Manager) fetchStateRaw(ctx context.Context, org, project, stack string, version *int) ([]byte, bool, error) {
+	if version != nil {
+		return m.store.GetStateVersionRaw(ctx, org, project, stack, *version)
+	}
+	data, _, isCompressed, err := m.store.GetCurrentStateRaw(ctx, org, project, stack)
+	return data, isCompressed, err
+}
+
 // --- State Export/Import ---
 
+// ExportState returns the deployment JSON for a stack (current version if nil).
 func (m *Manager) ExportState(ctx context.Context, org, project, stack string, version *int) ([]byte, error) {
 	ctx, span := tracer.Start(ctx, "engine.ExportState",
 		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stack))))
@@ -276,15 +293,7 @@ func (m *Manager) ExportState(ctx context.Context, org, project, stack string, v
 		}
 	}
 
-	var data []byte
-	var isCompressed bool
-	var err error
-
-	if version != nil {
-		data, isCompressed, err = m.store.GetStateVersionRaw(ctx, org, project, stack, *version)
-	} else {
-		data, _, isCompressed, err = m.store.GetCurrentStateRaw(ctx, org, project, stack)
-	}
+	data, isCompressed, err := m.fetchStateRaw(ctx, org, project, stack, version)
 	if err != nil {
 		return nil, err
 	}
@@ -369,6 +378,7 @@ func (m *Manager) ExportStateCompressed(ctx context.Context, org, project, stack
 	return data, isCompressed, nil
 }
 
+// ImportState saves new deployment state for a stack, bumping the version.
 func (m *Manager) ImportState(ctx context.Context, org, project, stack string, deployment []byte) error {
 	ctx, span := tracer.Start(ctx, "engine.ImportState",
 		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stack))))
@@ -414,6 +424,7 @@ func (m *Manager) ImportState(ctx context.Context, org, project, stack string, d
 
 // --- Update Lifecycle ---
 
+// CreateUpdateResult holds the ID of a newly created update.
 type CreateUpdateResult struct {
 	UpdateID string
 }
@@ -437,6 +448,7 @@ func (m *Manager) cleanupExpiredUpdate(ctx context.Context, org, project, stack 
 	return ErrStackHasActiveUpdate
 }
 
+// CreateUpdate registers a new update (preview, update, refresh, or destroy) for a stack.
 func (m *Manager) CreateUpdate(ctx context.Context, org, project, stack, kind string, config, metadata json.RawMessage) (*CreateUpdateResult, error) {
 	ctx, span := tracer.Start(ctx, "engine.CreateUpdate",
 		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stack)), attribute.String("kind", kind)))
@@ -476,6 +488,7 @@ func (m *Manager) CreateUpdate(ctx context.Context, org, project, stack, kind st
 	return &CreateUpdateResult{UpdateID: updateID}, nil
 }
 
+// StartUpdateResult holds the version, lease token, and journal version for a started update.
 type StartUpdateResult struct {
 	Version         int
 	Token           string
@@ -483,6 +496,7 @@ type StartUpdateResult struct {
 	JournalVersion  int
 }
 
+// StartUpdate transitions an update to in-progress, acquiring the stack lock and lease.
 func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[string]string, requestedJournalVersion int) (*StartUpdateResult, error) {
 	ctx, span := tracer.Start(ctx, "engine.StartUpdate",
 		trace.WithAttributes(attribute.String("update_id", updateID)))
@@ -548,6 +562,7 @@ func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[str
 	}, nil
 }
 
+// CompleteUpdate finalizes an update, replaying journals if needed and recording history.
 func (m *Manager) CompleteUpdate(ctx context.Context, updateID string, status string, result json.RawMessage) error {
 	ctx, span := tracer.Start(ctx, "engine.CompleteUpdate",
 		trace.WithAttributes(attribute.String("update_id", updateID), attribute.String("status", status)))
@@ -604,11 +619,13 @@ func (m *Manager) CompleteUpdate(ctx context.Context, updateID string, status st
 	return nil
 }
 
+// RenewLeaseResult holds the new lease token and its expiration.
 type RenewLeaseResult struct {
 	Token           string
 	TokenExpiration int64
 }
 
+// RenewLease extends the lease for an active update with a new token and expiry.
 func (m *Manager) RenewLease(ctx context.Context, updateID string, duration time.Duration) (*RenewLeaseResult, error) {
 	if duration <= 0 {
 		duration = m.leaseDuration
@@ -639,6 +656,7 @@ func (m *Manager) RenewLease(ctx context.Context, updateID string, duration time
 	}, nil
 }
 
+// CancelUpdate cancels the active update on a stack, releasing the lock.
 func (m *Manager) CancelUpdate(ctx context.Context, org, project, stack string) error {
 	active, err := m.store.GetActiveUpdate(ctx, org, project, stack)
 	if err != nil {
@@ -656,10 +674,12 @@ func (m *Manager) CancelUpdate(ctx context.Context, org, project, stack string) 
 	return nil
 }
 
+// GetUpdate returns the update record for the given ID, or nil if not found.
 func (m *Manager) GetUpdate(ctx context.Context, updateID string) (*storage.Update, error) {
 	return m.store.GetUpdate(ctx, updateID)
 }
 
+// GetActiveUpdate returns the in-progress update for a stack, or nil if none.
 func (m *Manager) GetActiveUpdate(ctx context.Context, org, project, stack string) (*storage.Update, error) {
 	return m.store.GetActiveUpdate(ctx, org, project, stack)
 }
@@ -681,6 +701,7 @@ func (m *Manager) requireInProgress(ctx context.Context, updateID string) (*stor
 	return u, nil
 }
 
+// SaveCheckpoint persists a full deployment checkpoint for an in-progress update.
 func (m *Manager) SaveCheckpoint(ctx context.Context, updateID string, deployment []byte) error {
 	ctx, span := tracer.Start(ctx, "engine.SaveCheckpoint",
 		trace.WithAttributes(attribute.Int("bytes", len(deployment))))
@@ -751,6 +772,7 @@ func (m *Manager) SaveCheckpointDelta(ctx context.Context, updateID string, expe
 
 // --- Journal Entries ---
 
+// SaveJournalEntries appends journal entries for an update, assigning sequence IDs as needed.
 func (m *Manager) SaveJournalEntries(ctx context.Context, updateID string, entries []json.RawMessage) error {
 	ctx, span := tracer.Start(ctx, "engine.SaveJournalEntries",
 		trace.WithAttributes(attribute.Int("count", len(entries))))
@@ -787,6 +809,7 @@ func (m *Manager) SaveJournalEntries(ctx context.Context, updateID string, entri
 
 // --- Engine Events (async buffered) ---
 
+// SaveEngineEvents buffers engine events for async flush to storage.
 func (m *Manager) SaveEngineEvents(ctx context.Context, updateID string, events []json.RawMessage) error {
 	storageEvents := make([]storage.EngineEvent, len(events))
 	for i, raw := range events {
@@ -814,6 +837,7 @@ func (m *Manager) SaveEngineEvents(ctx context.Context, updateID string, events 
 	return nil
 }
 
+// GetEngineEvents flushes buffered events and returns events for an update starting at offset.
 func (m *Manager) GetEngineEvents(ctx context.Context, updateID string, offset, count int) ([]storage.EngineEvent, error) {
 	// Flush buffered events and read while holding the lock so no concurrent
 	// flush can start between our flush and our SQLite read.
@@ -866,16 +890,19 @@ func (m *Manager) eventFlusher(interval time.Duration) {
 
 // --- History ---
 
+// GetHistory returns a page of update history for a stack.
 func (m *Manager) GetHistory(ctx context.Context, org, project, stack string, pageSize, page int) ([]storage.UpdateHistory, error) {
 	return m.store.GetUpdateHistory(ctx, org, project, stack, pageSize, page)
 }
 
+// GetHistoryByVersion returns a single update history entry by version number.
 func (m *Manager) GetHistoryByVersion(ctx context.Context, org, project, stack string, version int) (*storage.UpdateHistory, error) {
 	return m.store.GetUpdateHistoryByVersion(ctx, org, project, stack, version)
 }
 
 // --- Secrets ---
 
+// EncryptValue encrypts a value using the stack's per-stack DEK.
 func (m *Manager) EncryptValue(ctx context.Context, org, project, stack string, plaintext []byte) ([]byte, error) {
 	ctx, span := tracer.Start(ctx, "engine.EncryptValue")
 	defer span.End()
@@ -886,6 +913,7 @@ func (m *Manager) EncryptValue(ctx context.Context, org, project, stack string, 
 	return m.secrets.Encrypt(key, plaintext)
 }
 
+// DecryptValue decrypts a value using the stack's per-stack DEK.
 func (m *Manager) DecryptValue(ctx context.Context, org, project, stack string, ciphertext []byte) ([]byte, error) {
 	ctx, span := tracer.Start(ctx, "engine.DecryptValue")
 	defer span.End()

@@ -23,6 +23,7 @@ import (
 // EmptyDeployment is the canonical JSON for a stack with no state.
 var EmptyDeployment = []byte(`{"version":3,"deployment":{"manifest":{"time":"0001-01-01T00:00:00Z","magic":"","version":""},"resources":null}}`)
 
+// Ping checks database connectivity.
 func (s *SQLiteStore) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
@@ -45,6 +46,7 @@ func nullUnixToTimePtr(v sql.NullInt64) *time.Time {
 
 const defaultMaxStateVersions = 50
 
+// SQLiteStoreConfig holds tuning parameters for SQLiteStore.
 type SQLiteStoreConfig struct {
 	MaxStateVersions  int // 0 = default (50), -1 = unlimited
 	StackListPageSize int // 0 = default (100)
@@ -62,6 +64,7 @@ func NewTokenEncryptor(seal func([]byte) ([]byte, error), open func([]byte) ([]b
 	return &TokenEncryptor{seal: seal, open: open}
 }
 
+// SQLiteStore implements Store using SQLite.
 type SQLiteStore struct {
 	db                *sql.DB
 	dsn               string
@@ -70,6 +73,7 @@ type SQLiteStore struct {
 	tokenEncryptor    *TokenEncryptor
 }
 
+// NewSQLiteStore opens or creates a SQLite database at the given path.
 func NewSQLiteStore(path string, cfgs ...SQLiteStoreConfig) (*SQLiteStore, error) {
 	dsn := "file:" + path + "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous(normal)&_pragma=foreign_keys(on)"
 	db, err := otelsql.Open("sqlite3", dsn,
@@ -172,6 +176,7 @@ func (s *SQLiteStore) decryptRefreshToken(stored string) (string, error) {
 	return string(pt), nil
 }
 
+// Close closes the database connection.
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
@@ -181,6 +186,7 @@ func (s *SQLiteStore) DB() *sql.DB {
 	return s.db
 }
 
+// Backup creates a consistent database backup at destPath.
 func (s *SQLiteStore) Backup(ctx context.Context, destPath string) error {
 	return s.rawConn(ctx, func(c sqlitedriver.Conn) error {
 		return c.Raw().Backup("main", "file:"+destPath)
@@ -189,6 +195,7 @@ func (s *SQLiteStore) Backup(ctx context.Context, destPath string) error {
 
 // --- Server config ---
 
+// GetConfig returns a server config value by key.
 func (s *SQLiteStore) GetConfig(ctx context.Context, key string) (string, error) {
 	var value string
 	err := s.db.QueryRowContext(ctx, `SELECT value FROM server_config WHERE key = ?`, key).Scan(&value)
@@ -198,6 +205,7 @@ func (s *SQLiteStore) GetConfig(ctx context.Context, key string) (string, error)
 	return value, err
 }
 
+// SetConfig stores a server config key-value pair.
 func (s *SQLiteStore) SetConfig(ctx context.Context, key, value string) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO server_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
@@ -205,6 +213,7 @@ func (s *SQLiteStore) SetConfig(ctx context.Context, key, value string) error {
 	return err
 }
 
+// DeleteConfig removes a server config entry.
 func (s *SQLiteStore) DeleteConfig(ctx context.Context, key string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM server_config WHERE key = ?`, key)
 	return err
@@ -342,6 +351,7 @@ CREATE INDEX IF NOT EXISTS idx_history_stack ON update_history(org_name, project
 
 // --- Stacks ---
 
+// CreateStack creates a new stack record.
 func (s *SQLiteStore) CreateStack(ctx context.Context, st *Stack) error {
 	now := time.Now().Unix()
 
@@ -385,6 +395,7 @@ func (s *SQLiteStore) CreateStack(ctx context.Context, st *Stack) error {
 	return tx.Commit()
 }
 
+// GetStack returns a stack by org, project, and name.
 func (s *SQLiteStore) GetStack(ctx context.Context, org, project, stack string) (*Stack, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT org_name, project_name, name, tags, current_version, resource_count, created_at, updated_at
@@ -422,6 +433,7 @@ func execAllTx(ctx context.Context, tx *sql.Tx, queries []string, args ...any) e
 	return nil
 }
 
+// DeleteStack removes a stack and all its associated data.
 func (s *SQLiteStore) DeleteStack(ctx context.Context, org, project, stack string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -479,6 +491,7 @@ func buildListStacksQuery(org, project, continuationToken string, pageSize int) 
 	return query, args
 }
 
+// ListStacks returns a paginated list of stacks with optional org/project filters.
 func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, continuationToken string) ([]Stack, string, error) {
 	query, args := buildListStacksQuery(org, project, continuationToken, s.stackListPageSize)
 
@@ -524,6 +537,7 @@ func splitToken(token string) []string {
 	return parts
 }
 
+// UpdateStackTags replaces the tags for a stack.
 func (s *SQLiteStore) UpdateStackTags(ctx context.Context, org, project, stack string, tags map[string]string) error {
 	tagsJSON, err := json.Marshal(tags)
 	if err != nil {
@@ -535,6 +549,7 @@ func (s *SQLiteStore) UpdateStackTags(ctx context.Context, org, project, stack s
 	return err
 }
 
+// RenameStack renames a stack and cascades the change to related tables.
 func (s *SQLiteStore) RenameStack(ctx context.Context, org, oldProject, oldName, newProject, newName string) error {
 	now := time.Now().Unix()
 
@@ -568,6 +583,7 @@ func (s *SQLiteStore) RenameStack(ctx context.Context, org, oldProject, oldName,
 	return tx.Commit()
 }
 
+// ProjectExists reports whether any stacks exist under the given org/project.
 func (s *SQLiteStore) ProjectExists(ctx context.Context, org, project string) (bool, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx,
@@ -578,6 +594,7 @@ func (s *SQLiteStore) ProjectExists(ctx context.Context, org, project string) (b
 
 // --- Stack State ---
 
+// GetCurrentState returns the latest deployment state for a stack.
 func (s *SQLiteStore) GetCurrentState(ctx context.Context, org, project, stack string) (*StackState, error) {
 	var version int
 	err := s.db.QueryRowContext(ctx,
@@ -598,6 +615,7 @@ func (s *SQLiteStore) GetCurrentState(ctx context.Context, org, project, stack s
 	return s.GetStateVersion(ctx, org, project, stack, version)
 }
 
+// GetStateVersion returns a specific version of a stack's deployment state.
 func (s *SQLiteStore) GetStateVersion(ctx context.Context, org, project, stack string, version int) (*StackState, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT org_name, project_name, stack_name, version, deployment, deployment_hash, created_at
@@ -659,6 +677,7 @@ func (s *SQLiteStore) GetCurrentStateRaw(ctx context.Context, org, project, stac
 	return data, version, isCompressed, err
 }
 
+// SaveState persists a deployment state version and updates the stack's current version.
 func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 	now := time.Now().Unix()
 
@@ -772,6 +791,7 @@ func CountResources(deployment []byte) int {
 
 // --- Updates ---
 
+// CreateUpdate inserts a new update record.
 func (s *SQLiteStore) CreateUpdate(ctx context.Context, u *Update) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx,
@@ -781,6 +801,7 @@ func (s *SQLiteStore) CreateUpdate(ctx context.Context, u *Update) error {
 	return err
 }
 
+// StartUpdate transitions an update to in-progress with a lease token.
 func (s *SQLiteStore) StartUpdate(ctx context.Context, id string, version int, token string, expires time.Time, journalVer int) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE updates SET status='in-progress', version=?, token=?, token_expires_at=?, journal_version=?, started_at=?
@@ -789,6 +810,7 @@ func (s *SQLiteStore) StartUpdate(ctx context.Context, id string, version int, t
 	return err
 }
 
+// GetUpdate returns an update by ID.
 func (s *SQLiteStore) GetUpdate(ctx context.Context, id string) (*Update, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, org_name, project_name, stack_name, kind, status, version, config, metadata, token, token_expires_at, journal_version, created_at, started_at, completed_at, result
@@ -828,6 +850,7 @@ func (s *SQLiteStore) GetUpdate(ctx context.Context, id string) (*Update, error)
 	return u, nil
 }
 
+// GetActiveUpdate returns the in-progress update for a stack, if any.
 func (s *SQLiteStore) GetActiveUpdate(ctx context.Context, org, proj, stack string) (*Update, error) {
 	// Find in-progress update
 	row := s.db.QueryRowContext(ctx,
@@ -845,6 +868,7 @@ func (s *SQLiteStore) GetActiveUpdate(ctx context.Context, org, proj, stack stri
 	return s.GetUpdate(ctx, id)
 }
 
+// CompleteUpdate marks an update as finished with the given status and result.
 func (s *SQLiteStore) CompleteUpdate(ctx context.Context, id string, status string, result []byte) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE updates SET status=?, result=?, completed_at=?, token='' WHERE id=?`,
@@ -852,6 +876,7 @@ func (s *SQLiteStore) CompleteUpdate(ctx context.Context, id string, status stri
 	return err
 }
 
+// RenewLease extends an update's lease with a new token and expiry.
 func (s *SQLiteStore) RenewLease(ctx context.Context, id string, newToken string, newExpiry time.Time) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE updates SET token=?, token_expires_at=? WHERE id=?`,
@@ -859,6 +884,7 @@ func (s *SQLiteStore) RenewLease(ctx context.Context, id string, newToken string
 	return err
 }
 
+// CancelUpdate marks an update as cancelled.
 func (s *SQLiteStore) CancelUpdate(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE updates SET status='cancelled', completed_at=? WHERE id=?`, time.Now().Unix(), id)
 	return err
@@ -866,6 +892,7 @@ func (s *SQLiteStore) CancelUpdate(ctx context.Context, id string) error {
 
 // --- Journal ---
 
+// SaveJournalEntries persists a batch of journal entries in a transaction.
 func (s *SQLiteStore) SaveJournalEntries(ctx context.Context, entries []JournalEntry) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -884,6 +911,7 @@ func (s *SQLiteStore) SaveJournalEntries(ctx context.Context, entries []JournalE
 	return tx.Commit()
 }
 
+// GetJournalEntries returns all journal entries for an update, ordered by sequence.
 func (s *SQLiteStore) GetJournalEntries(ctx context.Context, id string) ([]JournalEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT sequence_id, entry FROM journal_entries WHERE update_id=? ORDER BY sequence_id ASC`, id)
 	if err != nil {
@@ -903,6 +931,7 @@ func (s *SQLiteStore) GetJournalEntries(ctx context.Context, id string) ([]Journ
 	return entries, nil
 }
 
+// GetMaxJournalSequence returns the highest journal sequence ID for an update.
 func (s *SQLiteStore) GetMaxJournalSequence(ctx context.Context, id string) (int64, error) {
 	var maxSeq sql.NullInt64
 	err := s.db.QueryRowContext(ctx, "SELECT MAX(sequence_id) FROM journal_entries WHERE update_id=?", id).Scan(&maxSeq)
@@ -917,6 +946,7 @@ func (s *SQLiteStore) GetMaxJournalSequence(ctx context.Context, id string) (int
 
 // --- Engine Events ---
 
+// SaveEngineEvents persists a batch of engine events in a transaction.
 func (s *SQLiteStore) SaveEngineEvents(ctx context.Context, events []EngineEvent) error {
 	if len(events) == 0 {
 		return nil
@@ -942,6 +972,7 @@ func (s *SQLiteStore) SaveEngineEvents(ctx context.Context, events []EngineEvent
 	return tx.Commit()
 }
 
+// GetEngineEvents returns engine events for an update with pagination.
 func (s *SQLiteStore) GetEngineEvents(ctx context.Context, updateID string, offset, count int) ([]EngineEvent, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT update_id, sequence, event FROM engine_events WHERE update_id=? ORDER BY sequence LIMIT ? OFFSET ?`,
@@ -964,6 +995,7 @@ func (s *SQLiteStore) GetEngineEvents(ctx context.Context, updateID string, offs
 
 // --- Update History ---
 
+// SaveUpdateHistory records a completed update in the history table.
 func (s *SQLiteStore) SaveUpdateHistory(ctx context.Context, h *UpdateHistory) error {
 	var endTime *int64
 	if h.EndTime != nil {
@@ -978,6 +1010,7 @@ func (s *SQLiteStore) SaveUpdateHistory(ctx context.Context, h *UpdateHistory) e
 	return err
 }
 
+// GetUpdateHistory returns paginated update history for a stack.
 func (s *SQLiteStore) GetUpdateHistory(ctx context.Context, org, project, stack string, pageSize, page int) ([]UpdateHistory, error) {
 	if pageSize <= 0 {
 		pageSize = 10
@@ -1010,6 +1043,7 @@ func (s *SQLiteStore) GetUpdateHistory(ctx context.Context, org, project, stack 
 	return history, nil
 }
 
+// GetUpdateHistoryByVersion returns a single update history entry by version.
 func (s *SQLiteStore) GetUpdateHistoryByVersion(ctx context.Context, org, project, stack string, version int) (*UpdateHistory, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT org_name, project_name, stack_name, version, update_id, kind, status, message, environment, config, start_time, end_time, resource_changes
@@ -1034,6 +1068,7 @@ func (s *SQLiteStore) GetUpdateHistoryByVersion(ctx context.Context, org, projec
 
 // --- Tokens ---
 
+// CreateToken stores a new authentication token.
 func (s *SQLiteStore) CreateToken(ctx context.Context, t *Token) error {
 	var expiresAt *int64
 	if t.ExpiresAt != nil {
@@ -1084,6 +1119,7 @@ func (s *SQLiteStore) scanToken(scan func(dest ...any) error) (Token, error) {
 	return t, nil
 }
 
+// GetToken returns a token by its hash.
 func (s *SQLiteStore) GetToken(ctx context.Context, tokenHash string) (*Token, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT token_hash, user_name, description, refresh_token, groups, created_at, last_used_at, expires_at FROM tokens WHERE token_hash=?`,
@@ -1099,6 +1135,7 @@ func (s *SQLiteStore) GetToken(ctx context.Context, tokenHash string) (*Token, e
 	return &t, nil
 }
 
+// TouchToken updates the last-used timestamp for a token.
 func (s *SQLiteStore) TouchToken(ctx context.Context, tokenHash string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE tokens SET last_used_at=? WHERE token_hash=?`,
@@ -1106,12 +1143,14 @@ func (s *SQLiteStore) TouchToken(ctx context.Context, tokenHash string) error {
 	return err
 }
 
+// DeleteToken removes a token by its hash.
 func (s *SQLiteStore) DeleteToken(ctx context.Context, tokenHash string) error {
 	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM tokens WHERE token_hash=?`, tokenHash)
 	return err
 }
 
+// DeleteTokensByUser removes all tokens for a user and returns the count deleted.
 func (s *SQLiteStore) DeleteTokensByUser(ctx context.Context, userName string) (int64, error) {
 	result, err := s.db.ExecContext(ctx,
 		`DELETE FROM tokens WHERE user_name=?`, userName)
@@ -1121,6 +1160,7 @@ func (s *SQLiteStore) DeleteTokensByUser(ctx context.Context, userName string) (
 	return result.RowsAffected()
 }
 
+// ListTokensByUser returns all tokens for a user, ordered by creation time.
 func (s *SQLiteStore) ListTokensByUser(ctx context.Context, userName string) ([]Token, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT token_hash, user_name, description, refresh_token, groups, created_at, last_used_at, expires_at
@@ -1143,6 +1183,7 @@ func (s *SQLiteStore) ListTokensByUser(ctx context.Context, userName string) ([]
 
 // --- Secrets Keys ---
 
+// SaveSecretsKey stores an encrypted DEK for a stack.
 func (s *SQLiteStore) SaveSecretsKey(ctx context.Context, org, project, stack string, encryptedKey []byte) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT OR REPLACE INTO secrets_keys (org_name, project_name, stack_name, encryption_key) VALUES (?, ?, ?, ?)`,
@@ -1150,6 +1191,7 @@ func (s *SQLiteStore) SaveSecretsKey(ctx context.Context, org, project, stack st
 	return err
 }
 
+// GetSecretsKey returns the encrypted DEK for a stack.
 func (s *SQLiteStore) GetSecretsKey(ctx context.Context, org, project, stack string) ([]byte, error) {
 	var key []byte
 	err := s.db.QueryRowContext(ctx,
@@ -1161,6 +1203,7 @@ func (s *SQLiteStore) GetSecretsKey(ctx context.Context, org, project, stack str
 	return key, err
 }
 
+// ListSecretsKeys returns all encrypted DEKs for secrets key migration.
 func (s *SQLiteStore) ListSecretsKeys(ctx context.Context) ([]SecretsKeyEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT org_name, project_name, stack_name, encryption_key FROM secrets_keys`)
 	if err != nil {

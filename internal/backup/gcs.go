@@ -30,8 +30,10 @@ func newGCSProvider(ctx context.Context, bucket, prefix string) (*GCSProvider, e
 	return &GCSProvider{client: client, bucket: bucket, prefix: prefix}, nil
 }
 
+// Name implements Provider.
 func (p *GCSProvider) Name() string { return "gcs" }
 
+// Upload implements Provider.
 func (p *GCSProvider) Upload(ctx context.Context, localPath string) (string, error) {
 	f, err := os.Open(localPath)
 	if err != nil {
@@ -53,8 +55,9 @@ func (p *GCSProvider) Upload(ctx context.Context, localPath string) (string, err
 	return key, nil
 }
 
-func (p *GCSProvider) List(ctx context.Context) ([]BackupInfo, error) {
-	var backups []BackupInfo
+// List implements Provider.
+func (p *GCSProvider) List(ctx context.Context) ([]Info, error) {
+	var backups []Info
 
 	it := p.client.Bucket(p.bucket).Objects(ctx, &storage.Query{Prefix: p.prefix})
 	for {
@@ -65,7 +68,7 @@ func (p *GCSProvider) List(ctx context.Context) ([]BackupInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("list GCS objects: %w", err)
 		}
-		backups = append(backups, BackupInfo{
+		backups = append(backups, Info{
 			Key:          attrs.Name,
 			Size:         attrs.Size,
 			LastModified: attrs.Updated,
@@ -79,6 +82,7 @@ func (p *GCSProvider) List(ctx context.Context) ([]BackupInfo, error) {
 	return backups, nil
 }
 
+// Delete implements Provider.
 func (p *GCSProvider) Delete(ctx context.Context, key string) error {
 	if err := p.client.Bucket(p.bucket).Object(key).Delete(ctx); err != nil {
 		return fmt.Errorf("delete gs://%s/%s: %w", p.bucket, key, err)

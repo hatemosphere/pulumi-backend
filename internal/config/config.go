@@ -116,6 +116,7 @@ type Config struct {
 	OldKMSKey          string // --old-kms-key (KMS resource name for old provider)
 }
 
+// Parse parses config from os.Args and environment.
 func Parse() (*Config, error) {
 	return ParseArgs(os.Args[1:], os.Stderr)
 }
@@ -210,6 +211,7 @@ func registerMigrationFlags(fs *flag.FlagSet, c *Config) {
 	fs.StringVar(&c.OldKMSKey, "old-kms-key", "", "previous GCP KMS key resource name (for --migrate-secrets-key with gcpkms)")
 }
 
+// ParseArgs parses config from the given args and environment.
 func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 	c := &Config{}
 	fs := flag.NewFlagSet("pulumi-backend", flag.ContinueOnError)
@@ -246,6 +248,7 @@ func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 	return c, nil
 }
 
+// MasterKeyBytes decodes the hex master key to bytes.
 func (c *Config) MasterKeyBytes() ([]byte, error) {
 	return hex.DecodeString(c.MasterKey)
 }

@@ -153,7 +153,7 @@ func TestS3Provider_ListSortedNewestFirst(t *testing.T) {
 // --- Prune tests (using mock provider) ---
 
 type mockProvider struct {
-	backups []BackupInfo
+	backups []Info
 	deleted []string
 }
 
@@ -163,7 +163,7 @@ func (m *mockProvider) Upload(_ context.Context, _ string) (string, error) {
 	return "mock-key", nil
 }
 
-func (m *mockProvider) List(_ context.Context) ([]BackupInfo, error) {
+func (m *mockProvider) List(_ context.Context) ([]Info, error) {
 	return m.backups, nil
 }
 
@@ -174,7 +174,7 @@ func (m *mockProvider) Delete(_ context.Context, key string) error {
 
 func TestPrune_KeepsCorrectCount(t *testing.T) {
 	mock := &mockProvider{
-		backups: []BackupInfo{
+		backups: []Info{
 			{Key: "backup-5.db", LastModified: time.Now()},
 			{Key: "backup-4.db", LastModified: time.Now().Add(-1 * time.Hour)},
 			{Key: "backup-3.db", LastModified: time.Now().Add(-2 * time.Hour)},
@@ -197,7 +197,7 @@ func TestPrune_KeepsCorrectCount(t *testing.T) {
 
 func TestPrune_UnlimitedRetention(t *testing.T) {
 	mock := &mockProvider{
-		backups: []BackupInfo{{Key: "b1"}, {Key: "b2"}},
+		backups: []Info{{Key: "b1"}, {Key: "b2"}},
 	}
 	deleted, err := Prune(context.Background(), mock, 0)
 	if err != nil {
@@ -210,7 +210,7 @@ func TestPrune_UnlimitedRetention(t *testing.T) {
 
 func TestPrune_FewerThanRetention(t *testing.T) {
 	mock := &mockProvider{
-		backups: []BackupInfo{{Key: "b1"}},
+		backups: []Info{{Key: "b1"}},
 	}
 	deleted, err := Prune(context.Background(), mock, 5)
 	if err != nil {

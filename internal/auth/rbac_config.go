@@ -17,6 +17,7 @@ const (
 	PermissionAdmin            // delete stacks, rename, manage access
 )
 
+// String returns the permission level name.
 func (p Permission) String() string {
 	switch p {
 	case PermissionNone:

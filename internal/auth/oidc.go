@@ -106,6 +106,7 @@ type goOIDCVerifier struct {
 	verifier *oidc.IDTokenVerifier
 }
 
+// Verify validates a raw ID token and returns its claims.
 func (v *goOIDCVerifier) Verify(ctx context.Context, rawIDToken string) (map[string]any, error) {
 	token, err := v.verifier.Verify(ctx, rawIDToken)
 	if err != nil {

@@ -18,10 +18,12 @@ type PulumiError struct {
 	Message string `json:"message"`
 }
 
+// Error returns the error message.
 func (e *PulumiError) Error() string {
 	return e.Message
 }
 
+// GetStatus implements huma.StatusError.
 func (e *PulumiError) GetStatus() int {
 	return e.status
 }

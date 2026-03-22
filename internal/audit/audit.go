@@ -2,14 +2,15 @@ package audit
 
 import "log/slog"
 
-// Logger is the destination for audit log entries. Defaults to slog.Default().
-// Set to a separate logger to route audit output independently (e.g. to a
-// dedicated file for compliance).
-var Logger *slog.Logger
+var (
+	// Logger is the destination for audit log entries. Defaults to slog.Default().
+	// Set to a separate logger to route audit output independently.
+	Logger *slog.Logger
 
-// Enabled controls whether audit log entries are emitted. Set to false to
-// suppress all audit output (useful in tests that don't exercise auditing).
-var Enabled = true
+	// Enabled controls whether audit log entries are emitted.
+	// Set to false to suppress all audit output (useful in tests).
+	Enabled = true
+)
 
 func logger() *slog.Logger {
 	if Logger != nil {

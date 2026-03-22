@@ -22,7 +22,10 @@ import (
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
-var uuidPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+var (
+	uuidPattern        = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+	windowsPathPattern = regexp.MustCompile(`[A-Za-z]:\\`)
+)
 
 // isConflictError returns true if err is an engine state-conflict sentinel.
 func isConflictError(err error) bool {
@@ -66,8 +69,6 @@ func sanitizeError(err error) string {
 	}
 	return msg
 }
-
-var windowsPathPattern = regexp.MustCompile(`[A-Za-z]:\\`)
 
 func containsAbsolutePath(msg string) bool {
 	if windowsPathPattern.MatchString(msg) {
@@ -391,6 +392,7 @@ func (s *Server) registerUpdates(api huma.API) {
 
 // --- History ---
 
+// buildRequestedBy returns a RequestedBy value populated with the server's default user.
 func (s *Server) buildRequestedBy() RequestedBy {
 	return RequestedBy{
 		Name:        s.defaultUser,

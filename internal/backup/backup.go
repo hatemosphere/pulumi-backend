@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// BackupInfo describes a single backup stored by a Provider.
-type BackupInfo struct {
+// Info describes a single backup stored by a Provider.
+type Info struct {
 	Key          string
 	Size         int64
 	LastModified time.Time
@@ -20,7 +20,7 @@ type Provider interface {
 	Upload(ctx context.Context, localPath string) (remoteKey string, err error)
 
 	// List returns all backups at the destination, ordered newest-first.
-	List(ctx context.Context) ([]BackupInfo, error)
+	List(ctx context.Context) ([]Info, error)
 
 	// Delete removes a specific backup by key.
 	Delete(ctx context.Context, key string) error

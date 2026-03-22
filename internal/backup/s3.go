@@ -54,8 +54,10 @@ func newS3ProviderFromClient(client *s3.Client, bucket, prefix string) *S3Provid
 	return &S3Provider{client: client, bucket: bucket, prefix: prefix}
 }
 
+// Name implements Provider.
 func (p *S3Provider) Name() string { return "s3" }
 
+// Upload implements Provider.
 func (p *S3Provider) Upload(ctx context.Context, localPath string) (string, error) {
 	f, err := os.Open(localPath)
 	if err != nil {
@@ -78,8 +80,9 @@ func (p *S3Provider) Upload(ctx context.Context, localPath string) (string, erro
 	return key, nil
 }
 
-func (p *S3Provider) List(ctx context.Context) ([]BackupInfo, error) {
-	var backups []BackupInfo
+// List implements Provider.
+func (p *S3Provider) List(ctx context.Context) ([]Info, error) {
+	var backups []Info
 
 	paginator := s3.NewListObjectsV2Paginator(p.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(p.bucket),
@@ -92,7 +95,7 @@ func (p *S3Provider) List(ctx context.Context) ([]BackupInfo, error) {
 			return nil, fmt.Errorf("list S3 objects: %w", err)
 		}
 		for _, obj := range page.Contents {
-			backups = append(backups, BackupInfo{
+			backups = append(backups, Info{
 				Key:          aws.ToString(obj.Key),
 				Size:         aws.ToInt64(obj.Size),
 				LastModified: aws.ToTime(obj.LastModified),
@@ -107,6 +110,7 @@ func (p *S3Provider) List(ctx context.Context) ([]BackupInfo, error) {
 	return backups, nil
 }
 
+// Delete implements Provider.
 func (p *S3Provider) Delete(ctx context.Context, key string) error {
 	_, err := p.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(p.bucket),

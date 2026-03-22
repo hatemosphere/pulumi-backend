@@ -32,12 +32,15 @@ func NewLocalSecretsProvider(masterKey []byte) (*LocalSecretsProvider, error) {
 	return &LocalSecretsProvider{masterKey: masterKey}, nil
 }
 
+// ProviderName implements SecretsProvider.
 func (p *LocalSecretsProvider) ProviderName() string { return "local" }
 
+// WrapKey implements SecretsProvider.
 func (p *LocalSecretsProvider) WrapKey(_ context.Context, rawDEK []byte) ([]byte, error) {
 	return aesGCMSeal(p.masterKey, rawDEK)
 }
 
+// UnwrapKey implements SecretsProvider.
 func (p *LocalSecretsProvider) UnwrapKey(_ context.Context, wrappedDEK []byte) ([]byte, error) {
 	return aesGCMOpen(p.masterKey, wrappedDEK)
 }
@@ -73,8 +76,10 @@ func NewKMSSecretsProviderWithClient(client *kms.KeyManagementClient, keyName st
 	}
 }
 
+// ProviderName implements SecretsProvider.
 func (p *KMSSecretsProvider) ProviderName() string { return "gcpkms" }
 
+// WrapKey implements SecretsProvider.
 func (p *KMSSecretsProvider) WrapKey(ctx context.Context, rawDEK []byte) ([]byte, error) {
 	resp, err := p.client.Encrypt(ctx, &kmspb.EncryptRequest{
 		Name:      p.keyName,
@@ -86,6 +91,7 @@ func (p *KMSSecretsProvider) WrapKey(ctx context.Context, rawDEK []byte) ([]byte
 	return resp.Ciphertext, nil
 }
 
+// UnwrapKey implements SecretsProvider.
 func (p *KMSSecretsProvider) UnwrapKey(ctx context.Context, wrappedDEK []byte) ([]byte, error) {
 	resp, err := p.client.Decrypt(ctx, &kmspb.DecryptRequest{
 		Name:       p.keyName,
