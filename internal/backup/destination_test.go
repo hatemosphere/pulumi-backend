@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -24,7 +25,7 @@ func TestResolveDestination_URIParsing(t *testing.T) {
 				t.Fatal("expected error")
 			}
 			if tt.wantErr != "" {
-				if got := err.Error(); !containsSubstring(got, tt.wantErr) {
+				if got := err.Error(); !strings.Contains(got, tt.wantErr) {
 					t.Fatalf("error %q should contain %q", got, tt.wantErr)
 				}
 			}
@@ -67,17 +68,4 @@ func TestResolveDestination_TrailingSlash(t *testing.T) {
 	if s3p.prefix != "custom-prefix/" {
 		t.Fatalf("expected 'custom-prefix/', got %q", s3p.prefix)
 	}
-}
-
-func containsSubstring(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && contains(s, sub))
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

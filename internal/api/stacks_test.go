@@ -246,7 +246,8 @@ func TestStackHandlers_ExportFreshStack(t *testing.T) {
 	api.do(http.MethodPost, "/api/stacks/organization/test-project", map[string]string{"stackName": "empty"})
 
 	rec := api.do(http.MethodGet, "/api/stacks/organization/test-project/empty/export", nil)
-	assert.Contains(t, []int{http.StatusOK, http.StatusNotFound}, rec.Code)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"deployment"`)
 }
 
 func TestStackHandlers_UserStacksFilterByProject(t *testing.T) {

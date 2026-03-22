@@ -45,6 +45,7 @@ func writePEM(t *testing.T, dir, name, typ string, der []byte) string {
 }
 
 func TestJWT_HMAC_Valid(t *testing.T) {
+	t.Parallel()
 	secret := "my-test-secret-key-1234567890"
 	auth, err := NewJWTAuthenticator(JWTConfig{SigningKey: secret})
 	if err != nil {
@@ -72,6 +73,7 @@ func TestJWT_HMAC_Valid(t *testing.T) {
 }
 
 func TestJWT_RSA_Valid(t *testing.T) {
+	t.Parallel()
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +105,7 @@ func TestJWT_RSA_Valid(t *testing.T) {
 }
 
 func TestJWT_ECDSA_Valid(t *testing.T) {
+	t.Parallel()
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +137,7 @@ func TestJWT_ECDSA_Valid(t *testing.T) {
 }
 
 func TestJWT_ExpiredToken(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{SigningKey: secret})
 	if err != nil {
@@ -152,6 +156,7 @@ func TestJWT_ExpiredToken(t *testing.T) {
 }
 
 func TestJWT_MissingExp(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{SigningKey: secret})
 	if err != nil {
@@ -172,6 +177,7 @@ func TestJWT_MissingExp(t *testing.T) {
 }
 
 func TestJWT_WrongSignature(t *testing.T) {
+	t.Parallel()
 	auth, err := NewJWTAuthenticator(JWTConfig{SigningKey: "correct-key"})
 	if err != nil {
 		t.Fatal(err)
@@ -188,6 +194,7 @@ func TestJWT_WrongSignature(t *testing.T) {
 }
 
 func TestJWT_WrongAudience(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{
 		SigningKey: secret,
@@ -209,6 +216,7 @@ func TestJWT_WrongAudience(t *testing.T) {
 }
 
 func TestJWT_WrongIssuer(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{
 		SigningKey: secret,
@@ -230,6 +238,7 @@ func TestJWT_WrongIssuer(t *testing.T) {
 }
 
 func TestJWT_MissingSub(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{SigningKey: secret})
 	if err != nil {
@@ -247,6 +256,7 @@ func TestJWT_MissingSub(t *testing.T) {
 }
 
 func TestJWT_EmailClaim(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{
 		SigningKey:    secret,
@@ -271,6 +281,7 @@ func TestJWT_EmailClaim(t *testing.T) {
 }
 
 func TestJWT_GroupsAsArray(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{SigningKey: secret})
 	if err != nil {
@@ -292,6 +303,7 @@ func TestJWT_GroupsAsArray(t *testing.T) {
 }
 
 func TestJWT_GroupsAsCommaSeparatedString(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{SigningKey: secret})
 	if err != nil {
@@ -313,6 +325,7 @@ func TestJWT_GroupsAsCommaSeparatedString(t *testing.T) {
 }
 
 func TestJWT_GroupsAbsent(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{SigningKey: secret})
 	if err != nil {
@@ -333,6 +346,7 @@ func TestJWT_GroupsAbsent(t *testing.T) {
 }
 
 func TestJWT_CustomGroupsClaim(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{
 		SigningKey:  secret,
@@ -357,6 +371,7 @@ func TestJWT_CustomGroupsClaim(t *testing.T) {
 }
 
 func TestJWT_AlgorithmMismatch_HMAC_vs_RSA(t *testing.T) {
+	t.Parallel()
 	// Create RSA authenticator.
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -386,6 +401,7 @@ func TestJWT_AlgorithmMismatch_HMAC_vs_RSA(t *testing.T) {
 }
 
 func TestJWT_InvalidPEMFile(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.pem")
 	if err := os.WriteFile(path, []byte("not a valid PEM file"), 0o644); err != nil {
@@ -399,6 +415,7 @@ func TestJWT_InvalidPEMFile(t *testing.T) {
 }
 
 func TestJWT_EmptySigningKey(t *testing.T) {
+	t.Parallel()
 	_, err := NewJWTAuthenticator(JWTConfig{SigningKey: ""})
 	if err == nil {
 		t.Fatal("expected error for empty signing key")
@@ -406,6 +423,7 @@ func TestJWT_EmptySigningKey(t *testing.T) {
 }
 
 func TestJWT_IssuerAudienceOptional(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{SigningKey: secret})
 	if err != nil {
@@ -427,6 +445,7 @@ func TestJWT_IssuerAudienceOptional(t *testing.T) {
 }
 
 func TestJWT_ValidIssuerAndAudience(t *testing.T) {
+	t.Parallel()
 	secret := "test-secret"
 	auth, err := NewJWTAuthenticator(JWTConfig{
 		SigningKey: secret,

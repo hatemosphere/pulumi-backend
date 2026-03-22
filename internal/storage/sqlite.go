@@ -19,6 +19,9 @@ import (
 	"github.com/hatemosphere/pulumi-backend/internal/gziputil"
 )
 
+// EmptyDeployment is the canonical JSON for a stack with no state.
+var EmptyDeployment = []byte(`{"version":3,"deployment":{"manifest":{"time":"0001-01-01T00:00:00Z","magic":"","version":""},"resources":null}}`)
+
 func (s *SQLiteStore) Ping(ctx context.Context) error {
 	return s.db.PingContext(ctx)
 }
@@ -516,7 +519,7 @@ func (s *SQLiteStore) GetCurrentState(ctx context.Context, org, project, stack s
 	if version == 0 {
 		return &StackState{
 			OrgName: org, ProjectName: project, StackName: stack,
-			Version: 0, Deployment: []byte(`{"version":3,"deployment":{"manifest":{"time":"0001-01-01T00:00:00Z","magic":"","version":""},"resources":null}}`),
+			Version: 0, Deployment: EmptyDeployment,
 		}, nil
 	}
 	return s.GetStateVersion(ctx, org, project, stack, version)
@@ -577,8 +580,7 @@ func (s *SQLiteStore) GetCurrentStateRaw(ctx context.Context, org, project, stac
 		return nil, 0, false, err
 	}
 	if version == 0 {
-		empty := []byte(`{"version":3,"deployment":{"manifest":{"time":"0001-01-01T00:00:00Z","magic":"","version":""},"resources":null}}`)
-		return empty, 0, false, nil
+		return EmptyDeployment, 0, false, nil
 	}
 	data, isCompressed, err := s.GetStateVersionRaw(ctx, org, project, stack, version)
 	return data, version, isCompressed, err

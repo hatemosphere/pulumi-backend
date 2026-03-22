@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -79,5 +80,9 @@ func (c *GroupsCache) ResolveGroups(ctx context.Context, email string) ([]string
 		return nil, err
 	}
 
-	return result.([]string), nil
+	groups, ok := result.([]string)
+	if !ok {
+		return nil, fmt.Errorf("unexpected singleflight result type %T", result)
+	}
+	return groups, nil
 }

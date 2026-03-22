@@ -42,7 +42,7 @@ func (p *GCSProvider) Upload(ctx context.Context, localPath string) (string, err
 	key := p.prefix + filepath.Base(localPath)
 	w := p.client.Bucket(p.bucket).Object(key).NewWriter(ctx)
 	if _, err := io.Copy(w, f); err != nil {
-		w.Close()
+		_ = w.Close() // best-effort abort; Copy error is more informative
 		return "", fmt.Errorf("upload to gs://%s/%s: %w", p.bucket, key, err)
 	}
 	if err := w.Close(); err != nil {

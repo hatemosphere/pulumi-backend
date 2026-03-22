@@ -295,16 +295,15 @@ func replayJournalEntries(base checkpoint, entries []journalEntry) (checkpoint, 
 		}
 	}
 
+	// Build reverse index: resource index → operationID.
+	indexToOpID := make(map[int]int64, len(newResourceIndices))
+	for opID, idx := range newResourceIndices {
+		indexToOpID[idx] = opID
+	}
+
 	// Append new resources (skipping any that were marked for removal).
 	for i, r := range newResources {
-		opID := int64(-1)
-		for oid, idx := range newResourceIndices {
-			if idx == i {
-				opID = oid
-				break
-			}
-		}
-		if opID >= 0 && newResourcesToRemove[opID] {
+		if opID, ok := indexToOpID[i]; ok && newResourcesToRemove[opID] {
 			continue
 		}
 		finalResources = append(finalResources, r)

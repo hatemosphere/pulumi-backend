@@ -57,8 +57,8 @@ func Decompress(data []byte) ([]byte, error) {
 	reader := bytes.NewReader(data)
 
 	var gr *gzip.Reader
-	if pooled := GzipReaderPool.Get(); pooled != nil {
-		gr = pooled.(*gzip.Reader)
+	if pooled, ok := GzipReaderPool.Get().(*gzip.Reader); ok && pooled != nil {
+		gr = pooled
 		if err := gr.Reset(reader); err != nil {
 			return nil, err
 		}

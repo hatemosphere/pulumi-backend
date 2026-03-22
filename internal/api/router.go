@@ -490,19 +490,22 @@ func (s *Server) authOIDCHuma(api huma.API, ctx huma.Context, next func(huma.Con
 
 	// Async: touch last_used_at + re-validate against OIDC provider if refresh token is stored.
 	go func() {
-		if err := s.tokenStore.TouchToken(context.Background(), tokenHash); err != nil {
+		asyncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := s.tokenStore.TouchToken(asyncCtx, tokenHash); err != nil {
 			slog.Warn("failed to touch token", "error", err)
 		}
 
 		// Re-validate when the token is past half its TTL.
 		// This detects deactivated users without adding latency to every request.
 		if tok.RefreshToken != "" && s.oidcAuth != nil && s.shouldRevalidate(tok) {
-			if err := s.oidcAuth.Revalidate(context.Background(), tok.RefreshToken); err != nil {
+			if err := s.oidcAuth.Revalidate(asyncCtx, tok.RefreshToken); err != nil {
 				slog.Warn("OIDC re-validation failed, revoking token",
 					"user", tok.UserName,
 					"error", err,
 				)
-				if delErr := s.tokenStore.DeleteToken(context.Background(), tokenHash); delErr != nil {
+				if delErr := s.tokenStore.DeleteToken(asyncCtx, tokenHash); delErr != nil {
 					slog.Error("failed to delete revoked token", "error", delErr)
 				}
 			}
@@ -736,6 +739,13 @@ func securityHeaders(next http.Handler) http.Handler {
 // maxDecompressedBody is the maximum allowed size for a decompressed gzip request body (256 MB).
 const maxDecompressedBody = 256 << 20
 
+// writeJSONError writes a JSON error response with the given status code and message.
+func writeJSONError(w http.ResponseWriter, code int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]any{"code": code, "message": message})
+}
+
 // gzipDecompressor transparently decompresses gzip request bodies.
 // It limits decompressed size to maxDecompressedBody to prevent decompression bombs.
 func gzipDecompressor(next http.Handler) http.Handler {
@@ -743,32 +753,18 @@ func gzipDecompressor(next http.Handler) http.Handler {
 		if r.Header.Get("Content-Encoding") == "gzip" {
 			gz, err := gzip.NewReader(r.Body)
 			if err != nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"code":    http.StatusBadRequest,
-					"message": "invalid gzip body",
-				})
+				writeJSONError(w, http.StatusBadRequest, "invalid gzip body")
 				return
 			}
+			defer gz.Close()
 			limitReader := &io.LimitedReader{R: gz, N: maxDecompressedBody + 1}
 			var buf bytes.Buffer
 			if _, err := io.Copy(&buf, limitReader); err != nil {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"code":    http.StatusBadRequest,
-					"message": "invalid gzip body",
-				})
+				writeJSONError(w, http.StatusBadRequest, "invalid gzip body")
 				return
 			}
 			if limitReader.N <= 0 {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusRequestEntityTooLarge)
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"code":    http.StatusRequestEntityTooLarge,
-					"message": "decompressed body exceeds size limit",
-				})
+				writeJSONError(w, http.StatusRequestEntityTooLarge, "decompressed body exceeds size limit")
 				return
 			}
 			r.Body = io.NopCloser(&buf)

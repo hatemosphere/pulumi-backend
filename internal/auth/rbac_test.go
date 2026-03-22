@@ -15,6 +15,7 @@ func mustNewRBACResolver(t *testing.T, config *RBACConfig) *RBACResolver {
 }
 
 func TestRBACResolver_AdminBypass(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 	identity := &UserIdentity{UserName: "admin", IsAdmin: true}
 
@@ -25,6 +26,7 @@ func TestRBACResolver_AdminBypass(t *testing.T) {
 }
 
 func TestRBACResolver_DefaultPermission(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 	identity := &UserIdentity{UserName: "user@company.com", Groups: []string{"unknown@company.com"}}
 
@@ -35,6 +37,7 @@ func TestRBACResolver_DefaultPermission(t *testing.T) {
 }
 
 func TestRBACResolver_GroupRole(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []GroupRole{
@@ -66,6 +69,7 @@ func TestRBACResolver_GroupRole(t *testing.T) {
 }
 
 func TestRBACResolver_StackPolicy(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []GroupRole{
@@ -127,6 +131,7 @@ func TestRBACResolver_StackPolicy(t *testing.T) {
 }
 
 func TestRBACResolver_NilConfig(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, nil)
 	identity := &UserIdentity{UserName: "anyone"}
 
@@ -137,6 +142,7 @@ func TestRBACResolver_NilConfig(t *testing.T) {
 }
 
 func TestRBACResolver_NilIdentity(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 
 	perm := resolver.Resolve(nil, "org", "project", "stack")
@@ -146,6 +152,7 @@ func TestRBACResolver_NilIdentity(t *testing.T) {
 }
 
 func TestRequirePermission_AdminBypass(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 	ctx := WithIdentity(context.Background(), &UserIdentity{IsAdmin: true})
 
@@ -155,6 +162,7 @@ func TestRequirePermission_AdminBypass(t *testing.T) {
 }
 
 func TestRequirePermission_Denied(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 	ctx := WithIdentity(context.Background(), &UserIdentity{UserName: "user@company.com"})
 
@@ -165,6 +173,7 @@ func TestRequirePermission_Denied(t *testing.T) {
 }
 
 func TestRequirePermission_NilResolver(t *testing.T) {
+	t.Parallel()
 	ctx := WithIdentity(context.Background(), &UserIdentity{UserName: "user@company.com"})
 
 	if err := RequirePermission(ctx, nil, "org", "project", "stack", PermissionAdmin); err != nil {
@@ -173,6 +182,7 @@ func TestRequirePermission_NilResolver(t *testing.T) {
 }
 
 func TestRBACResolver_OverlappingStackPolicies(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "none",
 		StackPolicies: []StackPolicy{
@@ -190,6 +200,7 @@ func TestRBACResolver_OverlappingStackPolicies(t *testing.T) {
 }
 
 func TestRBACResolver_WildcardPatterns(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "read",
 		StackPolicies: []StackPolicy{
@@ -236,6 +247,7 @@ func TestRBACResolver_WildcardPatterns(t *testing.T) {
 }
 
 func TestRBACResolver_EmptyGroups(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []GroupRole{
@@ -251,6 +263,7 @@ func TestRBACResolver_EmptyGroups(t *testing.T) {
 }
 
 func TestRBACResolver_StackPolicyOverridesGroupRole(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "none",
 		GroupRoles: []GroupRole{
@@ -270,6 +283,7 @@ func TestRBACResolver_StackPolicyOverridesGroupRole(t *testing.T) {
 }
 
 func TestRBACResolver_InvalidPermissionInConfig(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{
 		DefaultPermission: "read",
 		GroupRoles: []GroupRole{
@@ -293,6 +307,7 @@ func TestNewRBACResolver_InvalidDefaultPermission(t *testing.T) {
 }
 
 func TestRequirePermission_NoIdentity(t *testing.T) {
+	t.Parallel()
 	resolver := mustNewRBACResolver(t, &RBACConfig{DefaultPermission: "read"})
 	// Context without identity.
 	err := RequirePermission(context.Background(), resolver, "org", "project", "stack", PermissionRead)
@@ -302,6 +317,7 @@ func TestRequirePermission_NoIdentity(t *testing.T) {
 }
 
 func TestPermissionOrdering(t *testing.T) {
+	t.Parallel()
 	if PermissionNone >= PermissionRead {
 		t.Fatal("none should be less than read")
 	}
@@ -314,6 +330,7 @@ func TestPermissionOrdering(t *testing.T) {
 }
 
 func TestParsePermission(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input    string
 		expected Permission

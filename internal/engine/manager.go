@@ -276,10 +276,7 @@ func (m *Manager) ExportState(ctx context.Context, org, project, stack string, v
 	if version != nil {
 		data, isCompressed, err = m.store.GetStateVersionRaw(ctx, org, project, stack, *version)
 	} else {
-		// GetCurrentStateRaw returns version too, but we only need data + isCompressed
-		var ver int
-		data, ver, isCompressed, err = m.store.GetCurrentStateRaw(ctx, org, project, stack)
-		_ = ver
+		data, _, isCompressed, err = m.store.GetCurrentStateRaw(ctx, org, project, stack)
 	}
 	if err != nil {
 		return nil, err
@@ -339,8 +336,7 @@ func (m *Manager) ExportStateCompressed(ctx context.Context, org, project, stack
 		ver = st.Version
 	}
 	if ver == 0 {
-		empty := []byte(`{"version":3,"deployment":{"manifest":{"time":"0001-01-01T00:00:00Z","magic":"","version":""},"resources":null}}`)
-		return empty, false, nil
+		return storage.EmptyDeployment, false, nil
 	}
 
 	// Fetch raw (compressed) data from store.
@@ -506,8 +502,7 @@ func (m *Manager) StartUpdate(ctx context.Context, updateID string, tags map[str
 	if len(tags) > 0 {
 		if err := m.store.UpdateStackTags(ctx, u.OrgName, u.ProjectName, u.StackName, tags); err != nil {
 			m.releaseStackLock(u.OrgName, u.ProjectName, u.StackName)
-			slog.Error("failed to update stack tags", "error", err)
-			return nil, errors.New("failed to update stack tags")
+			return nil, fmt.Errorf("update stack tags: %w", err)
 		}
 	}
 
@@ -888,7 +883,10 @@ func (m *Manager) DecryptValue(ctx context.Context, org, project, stack string, 
 func (m *Manager) getOrCreateSecretsKey(ctx context.Context, org, project, stack string) ([]byte, error) {
 	key := stackKey(org, project, stack)
 	if cached, ok := m.secretsCache.Get(key); ok {
-		return cached, nil
+		// Return a copy: the eviction callback zeros the cached slice.
+		result := make([]byte, len(cached))
+		copy(result, cached)
+		return result, nil
 	}
 
 	existing, err := m.store.GetSecretsKey(ctx, org, project, stack)
@@ -900,20 +898,26 @@ func (m *Manager) getOrCreateSecretsKey(ctx context.Context, org, project, stack
 		if err != nil {
 			return nil, err
 		}
-		m.secretsCache.Add(key, decrypted)
+		// Copy before caching: the eviction callback zeros cached slices,
+		// so callers must hold an independent copy.
+		cached := make([]byte, len(decrypted))
+		copy(cached, decrypted)
+		m.secretsCache.Add(key, cached)
 		return decrypted, nil
 	}
 
 	// Generate a new per-stack key and encrypt it with the master key.
-	stackKey, encryptedStackKey, err := m.secrets.GenerateStackKey(ctx)
+	newStackKey, encryptedStackKey, err := m.secrets.GenerateStackKey(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if err := m.store.SaveSecretsKey(ctx, org, project, stack, encryptedStackKey); err != nil {
 		return nil, err
 	}
-	m.secretsCache.Add(key, stackKey)
-	return stackKey, nil
+	cached := make([]byte, len(newStackKey))
+	copy(cached, newStackKey)
+	m.secretsCache.Add(key, cached)
+	return newStackKey, nil
 }
 
 // --- Stack Locking ---

@@ -360,7 +360,7 @@ func verifyNewProvider(provider engine.SecretsProvider) error {
 	if err != nil {
 		return fmt.Errorf("decrypt test: %w", err)
 	}
-	if string(plaintext) != canaryPlaintext {
+	if subtle.ConstantTimeCompare(plaintext, []byte(canaryPlaintext)) != 1 {
 		return errors.New("round-trip mismatch: decrypted value does not match original")
 	}
 	return nil
