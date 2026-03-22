@@ -226,41 +226,33 @@ func openLogDest(path, format string) (slog.Handler, io.Closer, error) {
 const canaryPlaintext = "pulumi-backend-secrets-canary"
 
 func buildSecretsProvider(ctx context.Context, cfg *config.Config) (engine.SecretsProvider, error) {
-	switch cfg.SecretsProvider {
-	case "gcpkms":
-		kmsProvider, err := engine.NewKMSSecretsProvider(ctx, cfg.KMSKeyResourceName)
-		if err != nil {
-			return nil, fmt.Errorf("create KMS secrets provider: %w", err)
-		}
-		slog.Info("secrets provider: GCP KMS", "key", cfg.KMSKeyResourceName)
-		return kmsProvider, nil
-	case "local":
-		masterKey, err := cfg.MasterKeyBytes()
-		if err != nil {
-			return nil, fmt.Errorf("invalid master key: %w", err)
-		}
-		localProvider, err := engine.NewLocalSecretsProvider(masterKey)
-		if err != nil {
-			return nil, fmt.Errorf("create local secrets provider: %w", err)
-		}
-		return localProvider, nil
-	default:
-		return nil, fmt.Errorf("unsupported secrets provider %q", cfg.SecretsProvider)
+	masterKeyHex := cfg.MasterKey
+	provider, err := newSecretsProvider(ctx, cfg.SecretsProvider, masterKeyHex, cfg.KMSKeyResourceName)
+	if err != nil {
+		return nil, err
 	}
+	if cfg.SecretsProvider == "gcpkms" {
+		slog.Info("secrets provider: GCP KMS", "key", cfg.KMSKeyResourceName)
+	}
+	return provider, nil
 }
 
 func buildOldSecretsProvider(cfg *config.Config) (engine.SecretsProvider, error) {
-	switch cfg.OldSecretsProvider {
+	return newSecretsProvider(context.Background(), cfg.OldSecretsProvider, cfg.OldMasterKey, cfg.OldKMSKey)
+}
+
+func newSecretsProvider(ctx context.Context, providerType, masterKeyHex, kmsKey string) (engine.SecretsProvider, error) {
+	switch providerType {
 	case "gcpkms":
-		return engine.NewKMSSecretsProvider(context.Background(), cfg.OldKMSKey)
+		return engine.NewKMSSecretsProvider(ctx, kmsKey)
 	case "local":
-		key, err := hex.DecodeString(cfg.OldMasterKey)
+		key, err := hex.DecodeString(masterKeyHex)
 		if err != nil {
-			return nil, fmt.Errorf("invalid --old-master-key: %w", err)
+			return nil, fmt.Errorf("invalid master key: %w", err)
 		}
 		return engine.NewLocalSecretsProvider(key)
 	default:
-		return nil, fmt.Errorf("--old-secrets-provider must be 'local' or 'gcpkms', got %q", cfg.OldSecretsProvider)
+		return nil, fmt.Errorf("unsupported secrets provider %q", providerType)
 	}
 }
 
@@ -475,85 +467,101 @@ func buildServerOptions(ctx context.Context, cfg *config.Config, store storage.S
 func buildAuthOptions(ctx context.Context, cfg *config.Config, store storage.Store) ([]api.ServerOption, error) {
 	switch cfg.AuthMode {
 	case "single-tenant":
-		return nil, nil
+		return buildSingleTenantAuth()
 	case "google":
-		opts := []api.ServerOption{api.WithTokenStore(store)}
-
-		var groupsCache *auth.GroupsCache
-		if cfg.GoogleAdminEmail != "" {
-			resolver, err := auth.NewGroupsResolver(
-				ctx, cfg.GoogleSAKeyFile, cfg.GoogleSAEmail, cfg.GoogleAdminEmail, cfg.GoogleTransitiveGroups,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("create groups resolver: %w", err)
-			}
-			groupsCache = auth.NewGroupsCache(resolver, cfg.GroupsCacheTTL)
-			slog.Info("google groups resolution enabled",
-				"admin_email", cfg.GoogleAdminEmail,
-				"transitive", cfg.GoogleTransitiveGroups,
-			)
-		}
-
-		oidcAuth, err := auth.NewGoogleOIDCAuthenticator(ctx, auth.OIDCConfig{
-			ClientID:       cfg.GoogleClientID,
-			AllowedDomains: parseCSVList(cfg.GoogleAllowedDomains),
-			TokenTTL:       cfg.TokenTTL,
-		}, cfg.GoogleClientSecret, groupsCache)
-		if err != nil {
-			return nil, fmt.Errorf("create Google OIDC authenticator: %w", err)
-		}
-
-		opts = append(opts, api.WithOIDCAuth(oidcAuth))
-		if groupsCache != nil {
-			opts = append(opts, api.WithGroupsCache(groupsCache))
-		}
-		slog.Info("auth mode: google", "client_id", cfg.GoogleClientID)
-		return opts, nil
+		return buildGoogleAuth(ctx, cfg, store)
 	case "oidc":
-		oidcAuth, err := auth.NewOIDCAuthenticator(ctx, auth.OIDCConfig{
-			ClientID:       cfg.OIDCClientID,
-			AllowedDomains: parseCSVList(cfg.OIDCAllowedDomains),
-			TokenTTL:       cfg.TokenTTL,
-			ProviderName:   cfg.OIDCProviderName,
-			Scopes:         parseCSVList(cfg.OIDCScopes),
-			GroupsClaim:    cfg.OIDCGroupsClaim,
-			UsernameClaim:  cfg.OIDCUsernameClaim,
-		}, cfg.OIDCIssuer, cfg.OIDCClientSecret, nil)
-		if err != nil {
-			return nil, fmt.Errorf("create OIDC authenticator: %w", err)
-		}
-
-		slog.Info("auth mode: oidc",
-			"issuer", cfg.OIDCIssuer,
-			"client_id", cfg.OIDCClientID,
-			"provider_name", cfg.OIDCProviderName,
-		)
-		return []api.ServerOption{
-			api.WithTokenStore(store),
-			api.WithOIDCAuth(oidcAuth),
-		}, nil
+		return buildOIDCAuth(ctx, cfg, store)
 	case "jwt":
-		jwtAuth, err := auth.NewJWTAuthenticator(auth.JWTConfig{
-			SigningKey:    cfg.JWTSigningKey,
-			Issuer:        cfg.JWTIssuer,
-			Audience:      cfg.JWTAudience,
-			GroupsClaim:   cfg.JWTGroupsClaim,
-			UsernameClaim: cfg.JWTUsernameClaim,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create JWT authenticator: %w", err)
-		}
-
-		slog.Info("auth mode: jwt",
-			"issuer", cfg.JWTIssuer,
-			"audience", cfg.JWTAudience,
-			"username_claim", cfg.JWTUsernameClaim,
-			"groups_claim", cfg.JWTGroupsClaim,
-		)
-		return []api.ServerOption{api.WithJWTAuth(jwtAuth)}, nil
+		return buildJWTAuth(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported auth mode %q", cfg.AuthMode)
 	}
+}
+
+func buildSingleTenantAuth() ([]api.ServerOption, error) {
+	return nil, nil
+}
+
+func buildGoogleAuth(ctx context.Context, cfg *config.Config, store storage.Store) ([]api.ServerOption, error) {
+	opts := []api.ServerOption{api.WithTokenStore(store)}
+
+	var groupsCache *auth.GroupsCache
+	if cfg.GoogleAdminEmail != "" {
+		resolver, err := auth.NewGroupsResolver(
+			ctx, cfg.GoogleSAKeyFile, cfg.GoogleSAEmail, cfg.GoogleAdminEmail, cfg.GoogleTransitiveGroups,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("create groups resolver: %w", err)
+		}
+		groupsCache = auth.NewGroupsCache(resolver, cfg.GroupsCacheTTL)
+		slog.Info("google groups resolution enabled",
+			"admin_email", cfg.GoogleAdminEmail,
+			"transitive", cfg.GoogleTransitiveGroups,
+		)
+	}
+
+	oidcAuth, err := auth.NewGoogleOIDCAuthenticator(ctx, auth.OIDCConfig{
+		ClientID:       cfg.GoogleClientID,
+		AllowedDomains: parseCSVList(cfg.GoogleAllowedDomains),
+		TokenTTL:       cfg.TokenTTL,
+	}, cfg.GoogleClientSecret, groupsCache)
+	if err != nil {
+		return nil, fmt.Errorf("create Google OIDC authenticator: %w", err)
+	}
+
+	opts = append(opts, api.WithOIDCAuth(oidcAuth))
+	if groupsCache != nil {
+		opts = append(opts, api.WithGroupsCache(groupsCache))
+	}
+	slog.Info("auth mode: google", "client_id", cfg.GoogleClientID)
+	return opts, nil
+}
+
+func buildOIDCAuth(ctx context.Context, cfg *config.Config, store storage.Store) ([]api.ServerOption, error) {
+	oidcAuth, err := auth.NewOIDCAuthenticator(ctx, auth.OIDCConfig{
+		ClientID:       cfg.OIDCClientID,
+		AllowedDomains: parseCSVList(cfg.OIDCAllowedDomains),
+		TokenTTL:       cfg.TokenTTL,
+		ProviderName:   cfg.OIDCProviderName,
+		Scopes:         parseCSVList(cfg.OIDCScopes),
+		GroupsClaim:    cfg.OIDCGroupsClaim,
+		UsernameClaim:  cfg.OIDCUsernameClaim,
+	}, cfg.OIDCIssuer, cfg.OIDCClientSecret, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create OIDC authenticator: %w", err)
+	}
+
+	slog.Info("auth mode: oidc",
+		"issuer", cfg.OIDCIssuer,
+		"client_id", cfg.OIDCClientID,
+		"provider_name", cfg.OIDCProviderName,
+	)
+	return []api.ServerOption{
+		api.WithTokenStore(store),
+		api.WithOIDCAuth(oidcAuth),
+	}, nil
+}
+
+func buildJWTAuth(cfg *config.Config) ([]api.ServerOption, error) {
+	jwtAuth, err := auth.NewJWTAuthenticator(auth.JWTConfig{
+		SigningKey:    cfg.JWTSigningKey,
+		Issuer:        cfg.JWTIssuer,
+		Audience:      cfg.JWTAudience,
+		GroupsClaim:   cfg.JWTGroupsClaim,
+		UsernameClaim: cfg.JWTUsernameClaim,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create JWT authenticator: %w", err)
+	}
+
+	slog.Info("auth mode: jwt",
+		"issuer", cfg.JWTIssuer,
+		"audience", cfg.JWTAudience,
+		"username_claim", cfg.JWTUsernameClaim,
+		"groups_claim", cfg.JWTGroupsClaim,
+	)
+	return []api.ServerOption{api.WithJWTAuth(jwtAuth)}, nil
 }
 
 func parseCSVList(s string) []string {
@@ -639,6 +647,14 @@ func configureACME(httpServer *http.Server, store *storage.SQLiteStore, cfg *con
 	slog.Info("ACME automatic TLS enabled", "domain", cfg.ACMEDomain, "cache", "sqlite")
 }
 
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	if status != http.StatusOK {
+		w.WriteHeader(status)
+	}
+	_ = json.NewEncoder(w).Encode(v)
+}
+
 // startManagementServer starts the management server (healthz, readyz, metrics,
 // optional pprof) on a separate port. Returns nil if management-addr is not configured.
 func startManagementServer(mgr *engine.Manager, cfg *config.Config) *http.Server {
@@ -648,18 +664,14 @@ func startManagementServer(mgr *engine.Manager, cfg *config.Config) *http.Server
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := mgr.Ping(r.Context()); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "error"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "error"})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.Handle("GET /metrics", api.MetricsHandler())
 

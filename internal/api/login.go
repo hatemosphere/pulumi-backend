@@ -80,16 +80,14 @@ func (s *Server) registerLogin(api huma.API) {
 		return &huma.StreamResponse{
 			Body: func(ctx huma.Context) {
 				if input.SessionPort == "" || input.SessionNonce == "" {
-					ctx.SetHeader("Content-Type", "text/html; charset=utf-8")
-					renderErrorToWriter(ctx.BodyWriter(), "Missing cliSessionPort or cliSessionNonce parameters.")
+					renderHTMLError(ctx, "Missing cliSessionPort or cliSessionNonce parameters.")
 					return
 				}
 
 				// Fix 3: Validate CLI port is a valid integer in range 1-65535.
 				port, err := strconv.Atoi(input.SessionPort)
 				if err != nil || port < 1 || port > 65535 {
-					ctx.SetHeader("Content-Type", "text/html; charset=utf-8")
-					renderErrorToWriter(ctx.BodyWriter(), "Invalid cliSessionPort value.")
+					renderHTMLError(ctx, "Invalid cliSessionPort value.")
 					return
 				}
 
@@ -321,29 +319,38 @@ func schemeFromCtx(ctx huma.Context) string {
 	return "http"
 }
 
-// extractCSRFToken extracts the CSRF token from the OAuth state string.
+// loginState holds parsed fields from the OAuth state parameter.
 // State formats: "csrf:<token>" or "cli:<port>:<nonce>:<token>".
-func extractCSRFToken(state string) string {
+type loginState struct {
+	kind  string // "csrf" or "cli"
+	csrf  string
+	port  string // cli only
+	nonce string // cli only
+}
+
+// parseLoginState parses the OAuth state string into its components.
+func parseLoginState(state string) loginState {
 	if after, ok := strings.CutPrefix(state, "csrf:"); ok {
-		return after
+		return loginState{kind: "csrf", csrf: after}
 	}
 	if strings.HasPrefix(state, "cli:") {
 		parts := strings.SplitN(state, ":", 4)
 		if len(parts) == 4 {
-			return parts[3]
+			return loginState{kind: "cli", port: parts[1], nonce: parts[2], csrf: parts[3]}
 		}
 	}
-	return ""
+	return loginState{}
+}
+
+// extractCSRFToken extracts the CSRF token from the OAuth state string.
+func extractCSRFToken(state string) string {
+	return parseLoginState(state).csrf
 }
 
 // parseCLIState extracts port and nonce from a CLI login state string.
-// State format: "cli:<port>:<nonce>:<csrf>".
 func parseCLIState(state string) (port, nonce string) {
-	parts := strings.SplitN(state, ":", 4)
-	if len(parts) >= 3 {
-		return parts[1], parts[2]
-	}
-	return "", ""
+	ls := parseLoginState(state)
+	return ls.port, ls.nonce
 }
 
 // tokenDescription returns a human-readable description for the stored token.
@@ -352,6 +359,11 @@ func tokenDescription(state string) string {
 		return "cli-login"
 	}
 	return "browser-login"
+}
+
+func renderHTMLError(ctx huma.Context, msg string) {
+	ctx.SetHeader("Content-Type", "text/html; charset=utf-8")
+	renderErrorToWriter(ctx.BodyWriter(), msg)
 }
 
 func renderErrorToWriter(w io.Writer, msg string) {

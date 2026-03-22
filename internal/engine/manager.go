@@ -54,6 +54,15 @@ type BackupResult struct {
 	RemoteKeys map[string]string // provider name → remote key
 }
 
+// eventBuffer groups the fields used for async event buffering.
+type eventBuffer struct {
+	mu   sync.Mutex
+	buf  []storage.EngineEvent
+	max  int
+	stop chan struct{}
+	done chan struct{}
+}
+
 // Manager is the core engine orchestrating stacks, updates, and state.
 type Manager struct {
 	store         storage.Store
@@ -73,11 +82,7 @@ type Manager struct {
 	activeUpdates atomic.Int64
 
 	// Async event buffering.
-	eventMu   sync.Mutex
-	eventBuf  []storage.EngineEvent
-	eventMax  int
-	flushStop chan struct{}
-	flushDone chan struct{}
+	events eventBuffer
 }
 
 type stackLock struct {
@@ -135,9 +140,11 @@ func NewManager(store storage.Store, secrets *SecretsEngine, cfgs ...ManagerConf
 		backupDir:       cfg.BackupDir,
 		backupProviders: cfg.BackupProviders,
 		backupRetention: cfg.BackupRetention,
-		eventMax:        cfg.EventBufferSize,
-		flushStop:       make(chan struct{}),
-		flushDone:       make(chan struct{}),
+		events: eventBuffer{
+			max:  cfg.EventBufferSize,
+			stop: make(chan struct{}),
+			done: make(chan struct{}),
+		},
 	}
 
 	// Start the periodic event flusher.
@@ -156,8 +163,8 @@ func NewManager(store storage.Store, secrets *SecretsEngine, cfgs ...ManagerConf
 
 // Shutdown flushes buffered events and stops background goroutines.
 func (m *Manager) Shutdown() {
-	close(m.flushStop)
-	<-m.flushDone
+	close(m.events.stop)
+	<-m.events.done
 
 	if m.backupScheduler != nil {
 		m.backupScheduler.Shutdown()
@@ -411,6 +418,25 @@ type CreateUpdateResult struct {
 	UpdateID string
 }
 
+// cleanupExpiredUpdate attempts to auto-cancel an expired active update.
+// Returns nil if cleanup succeeded (or the update was stale enough to ignore),
+// or ErrStackHasActiveUpdate if the update is still valid.
+func (m *Manager) cleanupExpiredUpdate(ctx context.Context, org, project, stack string, active *storage.Update) error {
+	if active.Status == "in-progress" && time.Now().After(active.TokenExpiresAt) {
+		if err := m.store.CancelUpdate(ctx, active.ID); err != nil {
+			slog.Error("failed to cancel expired update", "updateID", active.ID, "error", err)
+			return ErrStackHasActiveUpdate
+		}
+		m.releaseStackLock(org, project, stack)
+		m.activeUpdates.Add(-1)
+		return nil
+	}
+	if active.Status == "not-started" && time.Now().After(active.TokenExpiresAt.Add(m.leaseDuration)) {
+		return nil
+	}
+	return ErrStackHasActiveUpdate
+}
+
 func (m *Manager) CreateUpdate(ctx context.Context, org, project, stack, kind string, config, metadata json.RawMessage) (*CreateUpdateResult, error) {
 	ctx, span := tracer.Start(ctx, "engine.CreateUpdate",
 		trace.WithAttributes(attribute.String("stack", stackKey(org, project, stack)), attribute.String("kind", kind)))
@@ -421,18 +447,8 @@ func (m *Manager) CreateUpdate(ctx context.Context, org, project, stack, kind st
 		return nil, err
 	}
 	if active != nil {
-		// Check if the lease has expired.
-		if active.Status == "in-progress" && time.Now().After(active.TokenExpiresAt) {
-			// Auto-cancel expired update. If cancel fails, abort so the next
-			// attempt retries cleanup rather than leaving a stale record.
-			if err := m.store.CancelUpdate(ctx, active.ID); err != nil {
-				slog.Error("failed to cancel expired update", "updateID", active.ID, "error", err)
-				return nil, ErrStackHasActiveUpdate
-			}
-			m.releaseStackLock(org, project, stack)
-			m.activeUpdates.Add(-1)
-		} else if active.Status != "not-started" || !time.Now().After(active.TokenExpiresAt.Add(m.leaseDuration)) {
-			return nil, ErrStackHasActiveUpdate
+		if err := m.cleanupExpiredUpdate(ctx, org, project, stack, active); err != nil {
+			return nil, err
 		}
 	}
 
@@ -787,10 +803,10 @@ func (m *Manager) SaveEngineEvents(ctx context.Context, updateID string, events 
 		}
 	}
 
-	m.eventMu.Lock()
-	m.eventBuf = append(m.eventBuf, storageEvents...)
-	shouldFlush := len(m.eventBuf) >= m.eventMax
-	m.eventMu.Unlock()
+	m.events.mu.Lock()
+	m.events.buf = append(m.events.buf, storageEvents...)
+	shouldFlush := len(m.events.buf) >= m.events.max
+	m.events.mu.Unlock()
 
 	if shouldFlush {
 		return m.flushEvents(ctx)
@@ -801,31 +817,31 @@ func (m *Manager) SaveEngineEvents(ctx context.Context, updateID string, events 
 func (m *Manager) GetEngineEvents(ctx context.Context, updateID string, offset, count int) ([]storage.EngineEvent, error) {
 	// Flush buffered events and read while holding the lock so no concurrent
 	// flush can start between our flush and our SQLite read.
-	m.eventMu.Lock()
+	m.events.mu.Lock()
 	_ = m.flushEventsLocked(ctx)
 	events, err := m.store.GetEngineEvents(ctx, updateID, offset, count)
-	m.eventMu.Unlock()
+	m.events.mu.Unlock()
 	return events, err
 }
 
 // flushEvents writes all buffered events to storage.
 func (m *Manager) flushEvents(ctx context.Context) error {
-	m.eventMu.Lock()
-	defer m.eventMu.Unlock()
+	m.events.mu.Lock()
+	defer m.events.mu.Unlock()
 	return m.flushEventsLocked(ctx)
 }
 
-// flushEventsLocked writes buffered events to storage. Caller must hold eventMu.
+// flushEventsLocked writes buffered events to storage. Caller must hold events.mu.
 func (m *Manager) flushEventsLocked(ctx context.Context) error {
-	if len(m.eventBuf) == 0 {
+	if len(m.events.buf) == 0 {
 		return nil
 	}
-	buf := m.eventBuf
-	m.eventBuf = nil
+	buf := m.events.buf
+	m.events.buf = nil
 
 	if err := m.store.SaveEngineEvents(ctx, buf); err != nil {
 		slog.Error("failed to flush events", "error", err, "count", len(buf))
-		m.eventBuf = append(buf, m.eventBuf...)
+		m.events.buf = append(buf, m.events.buf...)
 		return err
 	}
 	return nil
@@ -835,13 +851,13 @@ func (m *Manager) flushEventsLocked(ctx context.Context) error {
 func (m *Manager) eventFlusher(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	defer close(m.flushDone)
+	defer close(m.events.done)
 
 	for {
 		select {
 		case <-ticker.C:
 			_ = m.flushEvents(context.Background())
-		case <-m.flushStop:
+		case <-m.events.stop:
 			_ = m.flushEvents(context.Background())
 			return
 		}
@@ -881,8 +897,8 @@ func (m *Manager) DecryptValue(ctx context.Context, org, project, stack string, 
 }
 
 func (m *Manager) getOrCreateSecretsKey(ctx context.Context, org, project, stack string) ([]byte, error) {
-	key := stackKey(org, project, stack)
-	if cached, ok := m.secretsCache.Get(key); ok {
+	cacheKey := stackKey(org, project, stack)
+	if cached, ok := m.secretsCache.Get(cacheKey); ok {
 		// Return a copy: the eviction callback zeros the cached slice.
 		result := make([]byte, len(cached))
 		copy(result, cached)
@@ -898,12 +914,7 @@ func (m *Manager) getOrCreateSecretsKey(ctx context.Context, org, project, stack
 		if err != nil {
 			return nil, err
 		}
-		// Copy before caching: the eviction callback zeros cached slices,
-		// so callers must hold an independent copy.
-		cached := make([]byte, len(decrypted))
-		copy(cached, decrypted)
-		m.secretsCache.Add(key, cached)
-		return decrypted, nil
+		return m.cacheSecretsKey(cacheKey, decrypted), nil
 	}
 
 	// Generate a new per-stack key and encrypt it with the master key.
@@ -914,10 +925,19 @@ func (m *Manager) getOrCreateSecretsKey(ctx context.Context, org, project, stack
 	if err := m.store.SaveSecretsKey(ctx, org, project, stack, encryptedStackKey); err != nil {
 		return nil, err
 	}
-	cached := make([]byte, len(newStackKey))
-	copy(cached, newStackKey)
-	m.secretsCache.Add(key, cached)
-	return newStackKey, nil
+	return m.cacheSecretsKey(cacheKey, newStackKey), nil
+}
+
+// cacheSecretsKey stores a copy of plaintext in the secrets cache and returns
+// a separate copy for the caller. Two copies are necessary because the eviction
+// callback zeros the cached slice.
+func (m *Manager) cacheSecretsKey(cacheKey string, plaintext []byte) []byte {
+	cached := make([]byte, len(plaintext))
+	copy(cached, plaintext)
+	m.secretsCache.Add(cacheKey, cached)
+	result := make([]byte, len(plaintext))
+	copy(result, plaintext)
+	return result
 }
 
 // --- Stack Locking ---

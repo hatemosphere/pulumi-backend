@@ -139,6 +139,157 @@ func (m *Manager) replayAndSaveJournal(ctx context.Context, u *storage.Update) (
 	return resultJSON, nil
 }
 
+// opState tracks the lifecycle of a single journal operation.
+type opState struct {
+	begun     bool
+	completed bool
+	entry     journalEntry
+}
+
+// replayState holds all tracking variables during journal replay.
+type replayState struct {
+	ops                  map[int64]*opState
+	newResources         []json.RawMessage
+	newResourceIndices   map[int64]int             // operationID -> index in newResources
+	newResourcesToRemove map[int64]bool            // operationIDs of new resources to drop
+	baseIndicesToRemove  map[int64]bool            // base resource indices to remove
+	baseIndicesToUpdate  map[int64]json.RawMessage // base resource index -> new state
+	secretsProvider      json.RawMessage
+	hasRefresh           bool
+}
+
+func newReplayState(base checkpoint) *replayState {
+	return &replayState{
+		ops:                  map[int64]*opState{},
+		newResources:         []json.RawMessage{},
+		newResourceIndices:   map[int64]int{},
+		newResourcesToRemove: map[int64]bool{},
+		baseIndicesToRemove:  map[int64]bool{},
+		baseIndicesToUpdate:  map[int64]json.RawMessage{},
+		secretsProvider:      base.Deployment.SecretsProvider,
+	}
+}
+
+func handleBegin(e *journalEntry, rs *replayState) {
+	rs.ops[e.OperationID] = &opState{begun: true, entry: *e}
+}
+
+func handleSuccess(e *journalEntry, rs *replayState) {
+	if op, ok := rs.ops[e.OperationID]; ok {
+		op.completed = true
+	}
+	if e.IsRefresh {
+		rs.hasRefresh = true
+	}
+	// Add or update the resource.
+	if e.State != nil {
+		if idx, ok := rs.newResourceIndices[e.OperationID]; ok {
+			rs.newResources[idx] = *e.State
+		} else {
+			rs.newResourceIndices[e.OperationID] = len(rs.newResources)
+			rs.newResources = append(rs.newResources, *e.State)
+		}
+	}
+	// Mark base resources for removal.
+	if e.RemoveOld != nil {
+		rs.baseIndicesToRemove[*e.RemoveOld] = true
+	}
+	if e.RemoveNew != nil {
+		rs.newResourcesToRemove[*e.RemoveNew] = true
+	}
+	if e.DeleteOld != nil {
+		rs.baseIndicesToRemove[*e.DeleteOld] = true
+	}
+	if e.DeleteNew != nil {
+		rs.newResourcesToRemove[*e.DeleteNew] = true
+	}
+}
+
+func handleRefreshSuccess(e *journalEntry, rs *replayState) {
+	if op, ok := rs.ops[e.OperationID]; ok {
+		op.completed = true
+	}
+	rs.hasRefresh = true
+	// Non-persisted refresh: update resources in-place to preserve ordering.
+	if e.RemoveOld != nil {
+		if e.State != nil {
+			rs.baseIndicesToUpdate[*e.RemoveOld] = *e.State
+		} else {
+			rs.baseIndicesToRemove[*e.RemoveOld] = true
+		}
+	}
+	if e.RemoveNew != nil {
+		if e.State != nil {
+			if idx, ok := rs.newResourceIndices[*e.RemoveNew]; ok {
+				rs.newResources[idx] = *e.State
+			}
+		} else {
+			rs.newResourcesToRemove[*e.RemoveNew] = true
+		}
+	}
+}
+
+func handleFailure(e *journalEntry, rs *replayState) {
+	if op, ok := rs.ops[e.OperationID]; ok {
+		op.completed = true
+	}
+}
+
+func handleOutputs(e *journalEntry, rs *replayState) {
+	if e.State == nil {
+		return
+	}
+	if e.RemoveOld != nil {
+		rs.baseIndicesToUpdate[*e.RemoveOld] = *e.State
+	}
+	if e.RemoveNew != nil {
+		if idx, ok := rs.newResourceIndices[*e.RemoveNew]; ok {
+			rs.newResources[idx] = *e.State
+		}
+	}
+	// Fallback: try by operationID for older CLI versions.
+	if e.RemoveOld == nil && e.RemoveNew == nil {
+		if idx, ok := rs.newResourceIndices[e.OperationID]; ok {
+			rs.newResources[idx] = *e.State
+		}
+	}
+}
+
+func handleWrite(e *journalEntry, rs *replayState, base *checkpoint) {
+	if e.NewSnapshot == nil {
+		return
+	}
+	var snap deployment
+	if err := json.Unmarshal(*e.NewSnapshot, &snap); err == nil {
+		base.Deployment = snap
+		rs.baseIndicesToRemove = map[int64]bool{}
+		rs.baseIndicesToUpdate = map[int64]json.RawMessage{}
+	}
+}
+
+func handleSecretsManager(e *journalEntry, rs *replayState) {
+	if e.SecretsProvider != nil {
+		rs.secretsProvider = *e.SecretsProvider
+	}
+}
+
+func handleRebuiltBaseState(e *journalEntry, rs *replayState, base *checkpoint) {
+	if e.NewSnapshot == nil {
+		return
+	}
+	var snap deployment
+	if err := json.Unmarshal(*e.NewSnapshot, &snap); err == nil {
+		base.Deployment = snap
+		// Reset all tracking — the new base includes everything accumulated so far.
+		rs.baseIndicesToRemove = map[int64]bool{}
+		rs.baseIndicesToUpdate = map[int64]json.RawMessage{}
+		rs.newResources = nil
+		rs.newResourceIndices = map[int64]int{}
+		rs.newResourcesToRemove = map[int64]bool{}
+		rs.ops = map[int64]*opState{}
+	}
+}
+
 // replayJournalEntries replays journal entries against a base checkpoint to produce a new checkpoint.
 //
 // The algorithm follows Pulumi's reconstruction logic:
@@ -149,135 +300,27 @@ func (m *Manager) replayAndSaveJournal(ctx context.Context, u *storage.Update) (
 // 5. Merge: new resources + untouched base resources = final resources
 // 6. Collect pending ops from any incomplete operations
 func replayJournalEntries(base checkpoint, entries []journalEntry) (checkpoint, error) {
-	type opState struct {
-		begun     bool
-		completed bool
-		entry     journalEntry
-	}
+	rs := newReplayState(base)
 
-	ops := map[int64]*opState{}
-	newResources := []json.RawMessage{}                // resources added/updated by SUCCESS
-	newResourceIndices := map[int64]int{}              // operationID -> index in newResources
-	newResourcesToRemove := map[int64]bool{}           // operationIDs of new resources to drop
-	baseIndicesToRemove := map[int64]bool{}            // base resource indices to remove
-	baseIndicesToUpdate := map[int64]json.RawMessage{} // base resource index -> new state
-	secretsProvider := base.Deployment.SecretsProvider
-	hasRefresh := false
-
-	for _, e := range entries {
+	for i := range entries {
+		e := &entries[i]
 		switch e.Kind {
 		case JournalBegin:
-			ops[e.OperationID] = &opState{begun: true, entry: e}
-
+			handleBegin(e, rs)
 		case JournalSuccess:
-			if op, ok := ops[e.OperationID]; ok {
-				op.completed = true
-			}
-			if e.IsRefresh {
-				hasRefresh = true
-			}
-			// Add or update the resource.
-			if e.State != nil {
-				if idx, ok := newResourceIndices[e.OperationID]; ok {
-					newResources[idx] = *e.State
-				} else {
-					newResourceIndices[e.OperationID] = len(newResources)
-					newResources = append(newResources, *e.State)
-				}
-			}
-			// Mark base resources for removal.
-			if e.RemoveOld != nil {
-				baseIndicesToRemove[*e.RemoveOld] = true
-			}
-			if e.RemoveNew != nil {
-				newResourcesToRemove[*e.RemoveNew] = true
-			}
-			if e.DeleteOld != nil {
-				baseIndicesToRemove[*e.DeleteOld] = true
-			}
-			if e.DeleteNew != nil {
-				newResourcesToRemove[*e.DeleteNew] = true
-			}
-
+			handleSuccess(e, rs)
 		case JournalRefreshSuccess:
-			if op, ok := ops[e.OperationID]; ok {
-				op.completed = true
-			}
-			hasRefresh = true
-			// Non-persisted refresh: update resources in-place to preserve ordering.
-			if e.RemoveOld != nil {
-				if e.State != nil {
-					baseIndicesToUpdate[*e.RemoveOld] = *e.State
-				} else {
-					baseIndicesToRemove[*e.RemoveOld] = true
-				}
-			}
-			if e.RemoveNew != nil {
-				if e.State != nil {
-					// Update new resource in-place.
-					if idx, ok := newResourceIndices[*e.RemoveNew]; ok {
-						newResources[idx] = *e.State
-					}
-				} else {
-					newResourcesToRemove[*e.RemoveNew] = true
-				}
-			}
-
+			handleRefreshSuccess(e, rs)
 		case JournalFailure:
-			if op, ok := ops[e.OperationID]; ok {
-				op.completed = true
-			}
-
+			handleFailure(e, rs)
 		case JournalOutputs:
-			// Update outputs on an existing resource using RemoveOld/RemoveNew.
-			if e.State != nil {
-				if e.RemoveOld != nil {
-					baseIndicesToUpdate[*e.RemoveOld] = *e.State
-				}
-				if e.RemoveNew != nil {
-					if idx, ok := newResourceIndices[*e.RemoveNew]; ok {
-						newResources[idx] = *e.State
-					}
-				}
-				// Fallback: try by operationID for older CLI versions.
-				if e.RemoveOld == nil && e.RemoveNew == nil {
-					if idx, ok := newResourceIndices[e.OperationID]; ok {
-						newResources[idx] = *e.State
-					}
-				}
-			}
-
+			handleOutputs(e, rs)
 		case JournalWrite:
-			// A full snapshot write (e.g., initial base state from engine).
-			if e.NewSnapshot != nil {
-				var snap deployment
-				if err := json.Unmarshal(*e.NewSnapshot, &snap); err == nil {
-					base.Deployment = snap
-					// Reset tracking since base changed.
-					baseIndicesToRemove = map[int64]bool{}
-					baseIndicesToUpdate = map[int64]json.RawMessage{}
-				}
-			}
-
+			handleWrite(e, rs, &base)
 		case JournalSecretsManager:
-			if e.SecretsProvider != nil {
-				secretsProvider = *e.SecretsProvider
-			}
-
+			handleSecretsManager(e, rs)
 		case JournalRebuiltBaseState:
-			if e.NewSnapshot != nil {
-				var snap deployment
-				if err := json.Unmarshal(*e.NewSnapshot, &snap); err == nil {
-					base.Deployment = snap
-					// Reset all tracking — the new base includes everything accumulated so far.
-					baseIndicesToRemove = map[int64]bool{}
-					baseIndicesToUpdate = map[int64]json.RawMessage{}
-					newResources = nil
-					newResourceIndices = map[int64]int{}
-					newResourcesToRemove = map[int64]bool{}
-					ops = map[int64]*opState{}
-				}
-			}
+			handleRebuiltBaseState(e, rs, &base)
 		}
 	}
 
@@ -285,38 +328,38 @@ func replayJournalEntries(base checkpoint, entries []journalEntry) (checkpoint, 
 	var finalResources []json.RawMessage
 	for i, r := range base.Deployment.Resources {
 		idx64 := int64(i)
-		if baseIndicesToRemove[idx64] {
+		if rs.baseIndicesToRemove[idx64] {
 			continue
 		}
-		if updated, ok := baseIndicesToUpdate[idx64]; ok {
+		if updated, ok := rs.baseIndicesToUpdate[idx64]; ok {
 			finalResources = append(finalResources, updated)
 		} else {
 			finalResources = append(finalResources, r)
 		}
 	}
 
-	// Build reverse index: resource index → operationID.
-	indexToOpID := make(map[int]int64, len(newResourceIndices))
-	for opID, idx := range newResourceIndices {
+	// Build reverse index: resource index -> operationID.
+	indexToOpID := make(map[int]int64, len(rs.newResourceIndices))
+	for opID, idx := range rs.newResourceIndices {
 		indexToOpID[idx] = opID
 	}
 
 	// Append new resources (skipping any that were marked for removal).
-	for i, r := range newResources {
-		if opID, ok := indexToOpID[i]; ok && newResourcesToRemove[opID] {
+	for i, r := range rs.newResources {
+		if opID, ok := indexToOpID[i]; ok && rs.newResourcesToRemove[opID] {
 			continue
 		}
 		finalResources = append(finalResources, r)
 	}
 
 	// If refresh was involved, rebuild dependencies (prune dangling refs).
-	if hasRefresh {
+	if rs.hasRefresh {
 		rebuildDependencies(finalResources)
 	}
 
 	// Collect pending operations from incomplete operations.
 	var pendingOps []json.RawMessage
-	for _, op := range ops {
+	for _, op := range rs.ops {
 		if op.begun && !op.completed && op.entry.Operation != nil {
 			pendingOps = append(pendingOps, *op.entry.Operation)
 		}
@@ -328,7 +371,7 @@ func replayJournalEntries(base checkpoint, entries []journalEntry) (checkpoint, 
 		Version: 3,
 		Deployment: deployment{
 			Manifest:        base.Deployment.Manifest,
-			SecretsProvider: secretsProvider,
+			SecretsProvider: rs.secretsProvider,
 			Resources:       finalResources,
 			PendingOps:      pendingOps,
 		},

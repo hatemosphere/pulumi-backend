@@ -415,19 +415,23 @@ func historyToUpdateInfo(h *storage.UpdateHistory) UpdateInfo {
 	if len(h.ResourceChanges) > 0 {
 		info.ResourceChanges = json.RawMessage(h.ResourceChanges)
 	}
-	if len(h.Environment) > 0 {
-		var env map[string]string
-		if json.Unmarshal(h.Environment, &env) == nil {
-			info.Environment = env
-		}
-	}
-	if len(h.Config) > 0 {
-		var cfg map[string]any
-		if json.Unmarshal(h.Config, &cfg) == nil {
-			info.Config = cfg
-		}
-	}
+	info.Environment = unmarshalIfPresent[map[string]string](h.Environment)
+	info.Config = unmarshalIfPresent[map[string]any](h.Config)
 	return info
+}
+
+// unmarshalIfPresent attempts to unmarshal raw JSON into T, returning the zero value if
+// the data is empty or unmarshaling fails.
+func unmarshalIfPresent[T any](data []byte) T {
+	var zero T
+	if len(data) == 0 {
+		return zero
+	}
+	var v T
+	if json.Unmarshal(data, &v) != nil {
+		return zero
+	}
+	return v
 }
 
 func (s *Server) registerHistory(api huma.API) {

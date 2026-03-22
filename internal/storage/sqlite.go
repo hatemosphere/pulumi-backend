@@ -409,6 +409,16 @@ func (s *SQLiteStore) GetStack(ctx context.Context, org, project, stack string) 
 	return st, nil
 }
 
+// execAllTx executes each query in order within the given transaction, passing the same args to each.
+func execAllTx(ctx context.Context, tx *sql.Tx, queries []string, args ...any) error {
+	for _, q := range queries {
+		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *SQLiteStore) DeleteStack(ctx context.Context, org, project, stack string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -425,43 +435,49 @@ func (s *SQLiteStore) DeleteStack(ctx context.Context, org, project, stack strin
 			return err
 		}
 	}
-	for _, q := range []string{
+	if err = execAllTx(ctx, tx, []string{
 		`DELETE FROM updates WHERE org_name=? AND project_name=? AND stack_name=?`,
 		`DELETE FROM update_history WHERE org_name=? AND project_name=? AND stack_name=?`,
 		`DELETE FROM stack_state WHERE org_name=? AND project_name=? AND stack_name=?`,
 		`DELETE FROM secrets_keys WHERE org_name=? AND project_name=? AND stack_name=?`,
 		`DELETE FROM stacks WHERE org_name=? AND project_name=? AND name=?`,
-	} {
-		if _, err = tx.ExecContext(ctx, q, org, project, stack); err != nil {
-			return err
-		}
+	}, org, project, stack); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
 
-func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, continuationToken string) ([]Stack, string, error) {
-	query := `SELECT org_name, project_name, name, tags, current_version, resource_count, created_at, updated_at FROM stacks WHERE 1=1`
-	args := []any{}
+// buildListStacksQuery constructs the SQL query and arguments for ListStacks
+// based on the provided filters and continuation token.
+func buildListStacksQuery(org, project, continuationToken string, pageSize int) (string, []any) {
+	var filters []string
+	var args []any
 
 	if org != "" {
-		query += ` AND org_name=?`
+		filters = append(filters, "org_name=?")
 		args = append(args, org)
 	}
 	if project != "" {
-		query += ` AND project_name=?`
+		filters = append(filters, "project_name=?")
 		args = append(args, project)
 	}
 	if continuationToken != "" {
-		query += ` AND (org_name, project_name, name) > (?, ?, ?)`
-		tokenParts := splitToken(continuationToken)
-		if len(tokenParts) == 3 {
-			args = append(args, tokenParts[0], tokenParts[1], tokenParts[2])
-		} else {
-			args = append(args, "", "", "")
-		}
+		filters = append(filters, "(org_name, project_name, name) > (?, ?, ?)")
+		parts := splitToken(continuationToken)
+		args = append(args, parts[0], parts[1], parts[2])
+	}
+
+	query := `SELECT org_name, project_name, name, tags, current_version, resource_count, created_at, updated_at FROM stacks`
+	if len(filters) > 0 {
+		query += " WHERE " + strings.Join(filters, " AND ")
 	}
 	query += ` ORDER BY org_name, project_name, name LIMIT ?`
-	args = append(args, s.stackListPageSize)
+	args = append(args, pageSize)
+	return query, args
+}
+
+func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, continuationToken string) ([]Stack, string, error) {
+	query, args := buildListStacksQuery(org, project, continuationToken, s.stackListPageSize)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -534,15 +550,13 @@ func (s *SQLiteStore) RenameStack(ctx context.Context, org, oldProject, oldName,
 	}
 
 	// Cascade to related tables.
-	for _, q := range []string{
+	if err = execAllTx(ctx, tx, []string{
 		`UPDATE stack_state SET project_name=?, stack_name=? WHERE org_name=? AND project_name=? AND stack_name=?`,
 		`UPDATE updates SET project_name=?, stack_name=? WHERE org_name=? AND project_name=? AND stack_name=?`,
 		`UPDATE update_history SET project_name=?, stack_name=? WHERE org_name=? AND project_name=? AND stack_name=?`,
 		`UPDATE secrets_keys SET project_name=?, stack_name=? WHERE org_name=? AND project_name=? AND stack_name=?`,
-	} {
-		if _, err = tx.ExecContext(ctx, q, newProject, newName, org, oldProject, oldName); err != nil {
-			return err
-		}
+	}, newProject, newName, org, oldProject, oldName); err != nil {
+		return err
 	}
 
 	return tx.Commit()

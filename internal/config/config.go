@@ -120,12 +120,7 @@ func Parse() (*Config, error) {
 	return ParseArgs(os.Args[1:], os.Stderr)
 }
 
-func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
-	c := &Config{}
-	fs := flag.NewFlagSet("pulumi-backend", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-
-	// Core flags.
+func registerCoreFlags(fs *flag.FlagSet, c *Config) {
 	fs.StringVar(&c.Addr, "addr", ":8080", "listen address")
 	fs.StringVar(&c.DBPath, "db", "pulumi-backend.db", "SQLite database path")
 	fs.StringVar(&c.MasterKey, "master-key", "", "hex-encoded 32-byte master key for secrets (auto-generated if empty)")
@@ -137,20 +132,18 @@ func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 	fs.StringVar(&c.ACMECA, "acme-ca", "", "ACME directory URL (default: Let's Encrypt production)")
 	fs.StringVar(&c.DefaultOrg, "org", "organization", "default organization name")
 	fs.StringVar(&c.DefaultUser, "user", "admin", "default user name")
+}
 
-	// Tuning flags.
+func registerTuningFlags(fs *flag.FlagSet, c *Config) {
 	fs.DurationVar(&c.LeaseDuration, "lease-duration", 5*time.Minute, "update lease TTL")
 	fs.IntVar(&c.CacheSize, "cache-size", 256, "LRU cache size for deployment snapshots")
 	fs.IntVar(&c.DeltaCutoffBytes, "delta-cutoff", 1024*1024, "checkpoint size threshold for delta mode (bytes)")
 	fs.IntVar(&c.HistoryPageSize, "history-page-size", 10, "default page size for update history")
-	fs.IntVar(&c.MaxStateVersions, "max-state-versions", 50, "max state versions kept per stack (0 = unlimited)")
-	fs.IntVar(&c.StackListPageSize, "stack-list-page-size", 100, "page size for stack listings")
-
-	// Async event flags.
 	fs.IntVar(&c.EventBufferSize, "event-buffer-size", 1000, "max buffered events before forced flush")
 	fs.DurationVar(&c.EventFlushInterval, "event-flush-interval", time.Second, "periodic event flush interval")
+}
 
-	// Backup flags.
+func registerBackupFlags(fs *flag.FlagSet, c *Config) {
 	fs.StringVar(&c.BackupDir, "backup-dir", "", "directory for database backups (empty = disabled)")
 	fs.StringVar(&c.BackupDestination, "backup-destination", "", "backup destination URI: s3://bucket/prefix or gs://bucket/prefix")
 	fs.StringVar(&c.BackupS3Region, "backup-s3-region", "us-east-1", "AWS region for S3 backups")
@@ -158,12 +151,9 @@ func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 	fs.BoolVar(&c.BackupS3ForcePathStyle, "backup-s3-force-path-style", false, "force path-style S3 addressing (for MinIO)")
 	fs.DurationVar(&c.BackupSchedule, "backup-schedule", 0, "periodic backup interval (e.g., 6h, 24h; 0 = disabled)")
 	fs.IntVar(&c.BackupRetention, "backup-retention", 0, "number of backups to keep per destination (0 = unlimited)")
+}
 
-	// Secrets provider flags.
-	fs.StringVar(&c.SecretsProvider, "secrets-provider", "local", "secrets provider: local or gcpkms")
-	fs.StringVar(&c.KMSKeyResourceName, "kms-key", "", "GCP KMS key resource name (required for gcpkms provider)")
-
-	// Auth flags.
+func registerAuthFlags(fs *flag.FlagSet, c *Config) {
 	fs.StringVar(&c.AuthMode, "auth-mode", "single-tenant", "authentication mode: single-tenant, google, oidc, or jwt")
 	fs.StringVar(&c.SingleTenantToken, "single-tenant-token", "", "shared access token for single-tenant mode")
 	fs.StringVar(&c.GoogleClientID, "google-client-id", "", "Google OAuth2 client ID for JWT verification")
@@ -175,7 +165,6 @@ func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 	fs.BoolVar(&c.GoogleTransitiveGroups, "google-transitive-groups", false, "resolve nested group memberships")
 	fs.DurationVar(&c.TokenTTL, "token-ttl", 24*time.Hour, "backend-issued token lifetime")
 	fs.DurationVar(&c.GroupsCacheTTL, "groups-cache-ttl", 5*time.Minute, "group membership cache TTL")
-	// Generic OIDC flags.
 	fs.StringVar(&c.OIDCIssuer, "oidc-issuer", "", "OIDC provider discovery URL (required for oidc mode)")
 	fs.StringVar(&c.OIDCClientID, "oidc-client-id", "", "OIDC OAuth2 client ID")
 	fs.StringVar(&c.OIDCClientSecret, "oidc-client-secret", "", "OIDC OAuth2 client secret")
@@ -184,40 +173,56 @@ func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 	fs.StringVar(&c.OIDCGroupsClaim, "oidc-groups-claim", "groups", "OIDC claim key for group memberships")
 	fs.StringVar(&c.OIDCUsernameClaim, "oidc-username-claim", "email", "OIDC claim key for username")
 	fs.StringVar(&c.OIDCProviderName, "oidc-provider-name", "SSO", "display name for login page")
-	// JWT auth flags.
 	fs.StringVar(&c.JWTSigningKey, "jwt-signing-key", "", "HMAC secret or path to PEM public key for JWT verification")
 	fs.StringVar(&c.JWTIssuer, "jwt-issuer", "", "expected JWT issuer claim (optional)")
 	fs.StringVar(&c.JWTAudience, "jwt-audience", "", "expected JWT audience claim (optional)")
 	fs.StringVar(&c.JWTGroupsClaim, "jwt-groups-claim", "groups", "JWT claim name for group memberships")
 	fs.StringVar(&c.JWTUsernameClaim, "jwt-username-claim", "sub", "JWT claim for username (sub or email)")
 	fs.StringVar(&c.RBACConfigPath, "rbac-config", "", "path to rbac.yaml")
+}
 
-	// Logging flags.
+func registerLoggingFlags(fs *flag.FlagSet, c *Config) {
 	fs.StringVar(&c.LogFormat, "log-format", "json", "log format: json or text")
 	fs.BoolVar(&c.AuditLogs, "audit-logs", true, "enable structured audit logging")
 	fs.BoolVar(&c.AccessLogs, "access-logs", true, "enable per-request access logging")
 	fs.StringVar(&c.AuditLogPath, "audit-log-path", "", "audit log destination: stdout, stderr, or file path (empty = same as operational logs)")
+}
 
-	// Security flags.
+func registerSecurityFlags(fs *flag.FlagSet, c *Config) {
 	fs.StringVar(&c.TrustedProxies, "trusted-proxies", "", "comma-separated CIDRs for trusted proxy validation (empty = trust none)")
-
-	// Public URL flag.
 	fs.StringVar(&c.PublicURL, "public-url", "", "public base URL for redirect URIs (e.g. https://pulumi.example.com)")
+}
 
-	// Profiling flags.
+func registerAdvancedFlags(fs *flag.FlagSet, c *Config) {
 	fs.BoolVar(&c.PprofEnabled, "pprof", false, "enable pprof profiling endpoints at /debug/pprof/")
-
-	// OpenTelemetry flags.
-	fs.StringVar(&c.OTelServiceName, "otel-service-name", "", "OpenTelemetry service name (empty = tracing disabled, exporter configured via OTEL_EXPORTER_OTLP_ENDPOINT)")
-
-	// Management server flags.
 	fs.StringVar(&c.ManagementAddr, "management-addr", "", "separate listen address for /healthz, /readyz, /metrics (e.g., :9090; empty = serve on main port)")
+	fs.StringVar(&c.OTelServiceName, "otel-service-name", "", "OpenTelemetry service name (empty = tracing disabled, exporter configured via OTEL_EXPORTER_OTLP_ENDPOINT)")
+	fs.StringVar(&c.SecretsProvider, "secrets-provider", "local", "secrets provider: local or gcpkms")
+	fs.StringVar(&c.KMSKeyResourceName, "kms-key", "", "GCP KMS key resource name (required for gcpkms provider)")
+	fs.IntVar(&c.MaxStateVersions, "max-state-versions", 50, "max state versions kept per stack (0 = unlimited)")
+	fs.IntVar(&c.StackListPageSize, "stack-list-page-size", 100, "page size for stack listings")
+}
 
-	// Secrets key migration flags.
+func registerMigrationFlags(fs *flag.FlagSet, c *Config) {
 	fs.BoolVar(&c.MigrateSecretsKey, "migrate-secrets-key", false, "re-wrap all DEKs from old to new provider, then exit")
 	fs.StringVar(&c.OldSecretsProvider, "old-secrets-provider", "", "previous secrets provider: local or gcpkms (for --migrate-secrets-key)")
 	fs.StringVar(&c.OldMasterKey, "old-master-key", "", "previous hex-encoded master key (for --migrate-secrets-key with local)")
 	fs.StringVar(&c.OldKMSKey, "old-kms-key", "", "previous GCP KMS key resource name (for --migrate-secrets-key with gcpkms)")
+}
+
+func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
+	c := &Config{}
+	fs := flag.NewFlagSet("pulumi-backend", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	registerCoreFlags(fs, c)
+	registerTuningFlags(fs, c)
+	registerBackupFlags(fs, c)
+	registerAuthFlags(fs, c)
+	registerLoggingFlags(fs, c)
+	registerSecurityFlags(fs, c)
+	registerAdvancedFlags(fs, c)
+	registerMigrationFlags(fs, c)
 
 	// Parse flags and env vars (flag > env > default).
 	if err := ff.Parse(fs, args, ff.WithEnvVarPrefix("PULUMI_BACKEND")); err != nil {
