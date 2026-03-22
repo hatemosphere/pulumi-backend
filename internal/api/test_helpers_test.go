@@ -75,7 +75,7 @@ func newSQLiteTestServer(t *testing.T) *Server {
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 
-	return NewServer(mgr, "organization", "test-user")
+	return NewServer(mgr, "organization", "test-user", WithSingleTenantToken("test-token"))
 }
 
 // testAPI wraps a Server router for compact HTTP handler tests.

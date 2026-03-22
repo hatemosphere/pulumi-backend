@@ -92,7 +92,7 @@ func benchBackend(b *testing.B) *testBackend {
 		b.Fatalf("engine: %v", err)
 	}
 
-	srv := api.NewServer(mgr, "organization", "bench-user")
+	srv := api.NewServer(mgr, "organization", "bench-user", api.WithSingleTenantToken("test-token"))
 	router := srv.Router()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

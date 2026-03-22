@@ -126,7 +126,7 @@ In Kubernetes, all three go to stdout as structured JSON. Use Fluent Bit/Vector/
 
 | Flag | Env | Default | Description |
 |---|---|---|---|
-| `-pprof` | `PULUMI_BACKEND_PPROF` | `false` | Enable pprof profiling endpoints at `/debug/pprof/` |
+| `-pprof` | `PULUMI_BACKEND_PPROF` | `false` | Enable pprof profiling endpoints on the management listener |
 | `-management-addr` | `PULUMI_BACKEND_MANAGEMENT_ADDR` | (disabled) | Separate listen address for `/healthz`, `/readyz`, `/metrics` (e.g., `:9090`) |
 | `-otel-service-name` | `PULUMI_BACKEND_OTEL_SERVICE_NAME` | (disabled) | OpenTelemetry service name (enables OTLP tracing) |
 
@@ -218,9 +218,12 @@ Four auth modes: `single-tenant` (default), `google`, `oidc`, and `jwt`.
 | Flag | Env | Default | Description |
 |---|---|---|---|
 | `-auth-mode` | `PULUMI_BACKEND_AUTH_MODE` | `single-tenant` | `single-tenant`, `google`, `oidc`, or `jwt` |
-| `-rbac-config` | `PULUMI_BACKEND_RBAC_CONFIG` | | Path to RBAC config YAML (disabled if not set) |
+| `-single-tenant-token` | `PULUMI_BACKEND_SINGLE_TENANT_TOKEN` | | Shared access token for `single-tenant` mode |
+| `-rbac-config` | `PULUMI_BACKEND_RBAC_CONFIG` | | Path to RBAC config YAML |
 
-`single-tenant` is intentionally trust-based. Any request with `Authorization: token ...` is treated as the configured default user and granted admin access. There is no token lookup, expiry, or per-user identity in this mode, so it should only be used behind a trusted network boundary or reverse proxy.
+`single-tenant` uses a single shared access token for all users. Requests must send `Authorization: token <shared-token>`, and successful requests run as the configured default user with admin access.
+
+For `google`, `oidc`, and `jwt` modes, `-rbac-config` is required so multi-user deployments fail closed instead of granting blanket admin access.
 
 `update-token` is different from a normal user token. It is always treated as an update-scoped capability token for a specific in-progress update, and is only accepted on update endpoints that include the matching `{updateID}`. It does not grant general API access, even in `single-tenant` mode.
 

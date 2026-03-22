@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"errors"
 	"io"
 	"log/slog"
@@ -39,23 +40,24 @@ func accessLog() *slog.Logger {
 
 // Server is the HTTP API server.
 type Server struct {
-	engine               *engine.Manager
-	defaultOrg           string
-	defaultUser          string
-	deltaCutoffBytes     int
-	historyPageSize      int
-	humaAPI              huma.API
-	authMode             string                 // "single-tenant" (default), "google", "oidc", or "jwt"
-	tokenStore           storage.Store          // required in google/oidc auth modes
-	oidcAuth             auth.OIDCAuthenticator // required in google/oidc auth modes
-	groupsCache          *auth.GroupsCache      // optional: resolves groups via external API (e.g. Google Admin SDK)
-	jwtAuth              *auth.JWTAuthenticator // required in jwt auth mode
-	rbac                 *auth.RBACResolver     // nil = no RBAC enforcement
-	pprofEnabled         bool                   // enable /debug/pprof/ endpoints
-	publicURL            string                 // public base URL for redirect URIs (mitigates Host header poisoning)
-	skipManagementRoutes bool                   // skip /healthz, /readyz, /metrics on main mux (served on management port)
-	cliSessionNonces     *nonceStore            // server-side CLI session nonce store
-	trustedProxies       []*net.IPNet           // CIDRs allowed to set forwarded headers (nil = trust all)
+	engine                *engine.Manager
+	defaultOrg            string
+	defaultUser           string
+	deltaCutoffBytes      int
+	historyPageSize       int
+	humaAPI               huma.API
+	authMode              string                 // "single-tenant" (default), "google", "oidc", or "jwt"
+	singleTenantTokenHash string                 // required in single-tenant auth mode
+	tokenStore            storage.Store          // required in google/oidc auth modes
+	oidcAuth              auth.OIDCAuthenticator // required in google/oidc auth modes
+	groupsCache           *auth.GroupsCache      // optional: resolves groups via external API (e.g. Google Admin SDK)
+	jwtAuth               *auth.JWTAuthenticator // required in jwt auth mode
+	rbac                  *auth.RBACResolver     // nil = no RBAC enforcement
+	pprofEnabled          bool                   // enable /debug/pprof/ endpoints
+	publicURL             string                 // public base URL for redirect URIs (mitigates Host header poisoning)
+	skipManagementRoutes  bool                   // skip /healthz, /readyz, /metrics on main mux (served on management port)
+	cliSessionNonces      *nonceStore            // server-side CLI session nonce store
+	trustedProxies        []*net.IPNet           // CIDRs allowed to set forwarded headers (nil = trust none)
 }
 
 // NewServer creates a new API server.
@@ -90,6 +92,11 @@ func WithHistoryPageSize(size int) ServerOption {
 // WithAuthMode sets the authentication mode ("single-tenant", "google", "oidc", or "jwt").
 func WithAuthMode(mode string) ServerOption {
 	return func(s *Server) { s.authMode = mode }
+}
+
+// WithSingleTenantToken sets the shared access token for single-tenant mode.
+func WithSingleTenantToken(token string) ServerOption {
+	return func(s *Server) { s.singleTenantTokenHash = auth.HashToken(token) }
 }
 
 // WithTokenStore sets the storage backend for token-based auth lookups.
@@ -362,7 +369,7 @@ func (s *Server) registerPublicRoutes(api huma.API) {
 // authHumaMiddleware returns a huma middleware that validates the Authorization
 // header and sets a UserIdentity on the request context. Behaviour depends on
 // the configured auth mode:
-//   - single-tenant: any valid-format token grants full admin access.
+//   - single-tenant: the configured shared token grants full admin access.
 //   - jwt: stateless JWT validation, identity + groups extracted from claims.
 //   - google: backend-issued opaque token looked up in the database.
 func (s *Server) authHumaMiddleware(api huma.API) func(ctx huma.Context, next func(huma.Context)) {
@@ -393,6 +400,15 @@ func (s *Server) authHumaMiddleware(api huma.API) func(ctx huma.Context, next fu
 		case "google", "oidc":
 			s.authOIDCHuma(api, ctx, next, authHeader)
 		default: // single-tenant
+			tokenValue := strings.TrimPrefix(authHeader, "token ")
+			if s.singleTenantTokenHash == "" {
+				_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "single-tenant token is not configured")
+				return
+			}
+			if subtle.ConstantTimeCompare([]byte(auth.HashToken(tokenValue)), []byte(s.singleTenantTokenHash)) != 1 {
+				_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "invalid access token")
+				return
+			}
 			identity := &auth.UserIdentity{
 				UserName: s.defaultUser,
 				IsAdmin:  true,
@@ -675,10 +691,10 @@ func requestLogger(next http.Handler) http.Handler {
 }
 
 // realIP extracts the real client IP from X-Real-Ip or X-Forwarded-For headers.
-// When trustedProxies is non-nil, forwarded headers are only accepted from those CIDRs.
+// Forwarded headers are only accepted from explicitly trusted proxy CIDRs.
 func realIP(next http.Handler, trustedProxies []*net.IPNet) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if trustedProxies != nil && !isIPTrusted(r.RemoteAddr, trustedProxies) {
+		if trustedProxies == nil || !isIPTrusted(r.RemoteAddr, trustedProxies) {
 			next.ServeHTTP(w, r)
 			return
 		}

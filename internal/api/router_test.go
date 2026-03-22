@@ -24,7 +24,7 @@ func newTestServer(t *testing.T) (*Server, *MockStore) {
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 
-	return NewServer(mgr, "organization", "test-user"), store
+	return NewServer(mgr, "organization", "test-user", WithSingleTenantToken("test-token")), store
 }
 
 func TestAuthMiddlewareRejectsMissingHeader(t *testing.T) {
@@ -64,10 +64,10 @@ func TestAuthMiddlewareRejectsUpdateTokenOnNonUpdateRoute(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "update-token requires an update-scoped endpoint")
 }
 
-func TestSingleTenantAnyTokenUsesConfiguredAdminIdentity(t *testing.T) {
+func TestSingleTenantValidTokenUsesConfiguredAdminIdentity(t *testing.T) {
 	srv, _ := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/user", nil)
-	req.Header.Set("Authorization", "token anything-goes")
+	req.Header.Set("Authorization", "token test-token")
 	rec := httptest.NewRecorder()
 
 	srv.Router().ServeHTTP(rec, req)
@@ -81,6 +81,18 @@ func TestSingleTenantAnyTokenUsesConfiguredAdminIdentity(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, "test-user", body.GitHubLogin)
 	assert.True(t, body.SiteAdmin)
+}
+
+func TestSingleTenantRejectsWrongToken(t *testing.T) {
+	srv, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/user", nil)
+	req.Header.Set("Authorization", "token wrong-token")
+	rec := httptest.NewRecorder()
+
+	srv.Router().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid access token")
 }
 
 func TestAuthMiddlewareAcceptsValidUpdateTokenOnUpdateRoute(t *testing.T) {

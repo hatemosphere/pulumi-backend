@@ -296,14 +296,25 @@ func TestJWT_NonStackRoutes_SkipRBAC(t *testing.T) {
 	}
 }
 
-func TestSingleTenant_AnyToken(t *testing.T) {
-	// Default mode (no auth options) = single-tenant.
+func TestSingleTenant_WrongToken_401(t *testing.T) {
+	// Default mode = single-tenant with configured token "test-token".
+	// A random token must be rejected.
 	tb := startBackendWithOpts(t)
 
 	resp := tb.httpDoWithToken(t, "GET", "/api/user", "any-random-token", nil)
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for wrong token, got %d", resp.StatusCode)
+	}
+}
+
+func TestSingleTenant_CorrectToken_200(t *testing.T) {
+	tb := startBackendWithOpts(t)
+
+	resp := tb.httpDoWithToken(t, "GET", "/api/user", "test-token", nil)
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+		t.Fatalf("expected 200 for correct token, got %d", resp.StatusCode)
 	}
 }
 

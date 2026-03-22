@@ -284,10 +284,10 @@ func (s *Server) setOAuthStateCookieHuma(ctx huma.Context, csrfToken, oidcNonce 
 	ctx.AppendHeader("Set-Cookie", nonceCookie.String())
 }
 
-// isHTTPS returns true if the request uses HTTPS, determined from TLS state,
-// X-Forwarded-Proto header, or the configured public URL.
+// isHTTPS returns true if the request uses HTTPS, determined from TLS state
+// or the configured public URL.
 func isHTTPS(ctx huma.Context, publicURL string) bool {
-	if ctx.TLS() != nil || ctx.Header("X-Forwarded-Proto") == "https" {
+	if ctx.TLS() != nil {
 		return true
 	}
 	return strings.HasPrefix(publicURL, "https://")
@@ -315,7 +315,7 @@ func (s *Server) loginBaseURL(ctx huma.Context) string {
 
 // schemeFromCtx determines the request scheme from TLS state and headers.
 func schemeFromCtx(ctx huma.Context) string {
-	if ctx.TLS() != nil || ctx.Header("X-Forwarded-Proto") == "https" {
+	if ctx.TLS() != nil {
 		return "https"
 	}
 	return "http"

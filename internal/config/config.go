@@ -53,6 +53,8 @@ type Config struct {
 
 	// Auth mode: "single-tenant" (default), "google", "oidc", or "jwt".
 	AuthMode string
+	// Shared access token for single-tenant mode.
+	SingleTenantToken string
 	// Google auth settings (required when AuthMode == "google").
 	GoogleClientID         string        // OAuth2 client ID for JWT audience verification
 	GoogleSAKeyFile        string        // Optional path to SA JSON key for Admin SDK
@@ -156,6 +158,7 @@ func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 
 	// Auth flags.
 	fs.StringVar(&c.AuthMode, "auth-mode", "single-tenant", "authentication mode: single-tenant, google, oidc, or jwt")
+	fs.StringVar(&c.SingleTenantToken, "single-tenant-token", "", "shared access token for single-tenant mode")
 	fs.StringVar(&c.GoogleClientID, "google-client-id", "", "Google OAuth2 client ID for JWT verification")
 	fs.StringVar(&c.GoogleSAKeyFile, "google-sa-key", "", "optional path to SA JSON key for Admin SDK")
 	fs.StringVar(&c.GoogleSAEmail, "google-sa-email", "", "SA email for keyless DWD via IAM impersonation")
@@ -180,7 +183,7 @@ func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 	fs.StringVar(&c.JWTAudience, "jwt-audience", "", "expected JWT audience claim (optional)")
 	fs.StringVar(&c.JWTGroupsClaim, "jwt-groups-claim", "groups", "JWT claim name for group memberships")
 	fs.StringVar(&c.JWTUsernameClaim, "jwt-username-claim", "sub", "JWT claim for username (sub or email)")
-	fs.StringVar(&c.RBACConfigPath, "rbac-config", "", "path to rbac.yaml (empty = all users are admin)")
+	fs.StringVar(&c.RBACConfigPath, "rbac-config", "", "path to rbac.yaml")
 
 	// Logging flags.
 	fs.StringVar(&c.LogFormat, "log-format", "json", "log format: json or text")
@@ -189,7 +192,7 @@ func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 	fs.StringVar(&c.AuditLogPath, "audit-log-path", "", "audit log destination: stdout, stderr, or file path (empty = same as operational logs)")
 
 	// Security flags.
-	fs.StringVar(&c.TrustedProxies, "trusted-proxies", "", "comma-separated CIDRs for trusted proxy validation (empty = trust all)")
+	fs.StringVar(&c.TrustedProxies, "trusted-proxies", "", "comma-separated CIDRs for trusted proxy validation (empty = trust none)")
 
 	// Public URL flag.
 	fs.StringVar(&c.PublicURL, "public-url", "", "public base URL for redirect URIs (e.g. https://pulumi.example.com)")

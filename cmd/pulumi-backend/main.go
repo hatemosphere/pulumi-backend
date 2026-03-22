@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -207,6 +208,9 @@ func main() {
 		Addr:              cfg.Addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	// Start separate management server for health probes and metrics.
@@ -228,11 +232,22 @@ func main() {
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		})
 		mgmtMux.Handle("GET /metrics", api.MetricsHandler())
+		if cfg.PprofEnabled {
+			mgmtMux.HandleFunc("GET /debug/pprof/", pprof.Index)
+			mgmtMux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+			mgmtMux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+			mgmtMux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+			mgmtMux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+			slog.Info("pprof profiling endpoints enabled on management server at /debug/pprof/")
+		}
 
 		mgmtServer = &http.Server{
 			Addr:              cfg.ManagementAddr,
 			Handler:           mgmtMux,
 			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       2 * time.Minute,
 		}
 		go func() {
 			slog.Info("management server starting", "addr", cfg.ManagementAddr)

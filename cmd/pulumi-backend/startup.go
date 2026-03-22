@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 
 	"github.com/hatemosphere/pulumi-backend/internal/api"
 	"github.com/hatemosphere/pulumi-backend/internal/auth"
@@ -18,6 +19,10 @@ import (
 )
 
 func validateRuntimeConfig(cfg *config.Config) error {
+	if cfg.Addr == "" {
+		cfg.Addr = ":8080"
+	}
+
 	if cfg.TLS {
 		if cfg.CertFile == "" || cfg.KeyFile == "" {
 			return errors.New("cert and key are required when tls is enabled")
@@ -39,17 +44,35 @@ func validateRuntimeConfig(cfg *config.Config) error {
 
 	switch cfg.AuthMode {
 	case "single-tenant":
+		if cfg.SingleTenantToken == "" {
+			return errors.New("single-tenant-token is required when auth-mode=single-tenant")
+		}
 	case "google":
 		if cfg.GoogleClientID == "" {
 			return errors.New("google-client-id is required when auth-mode=google")
+		}
+		if cfg.RBACConfigPath == "" {
+			return errors.New("rbac-config is required when auth-mode=google")
+		}
+		if cfg.GoogleClientSecret != "" && cfg.PublicURL == "" {
+			return errors.New("public-url is required when browser login is enabled in auth-mode=google")
 		}
 	case "oidc":
 		if cfg.OIDCIssuer == "" || cfg.OIDCClientID == "" || cfg.OIDCClientSecret == "" {
 			return errors.New("oidc-issuer, oidc-client-id, and oidc-client-secret are required when auth-mode=oidc")
 		}
+		if cfg.RBACConfigPath == "" {
+			return errors.New("rbac-config is required when auth-mode=oidc")
+		}
+		if cfg.PublicURL == "" {
+			return errors.New("public-url is required when auth-mode=oidc")
+		}
 	case "jwt":
 		if cfg.JWTSigningKey == "" {
 			return errors.New("jwt-signing-key is required when auth-mode=jwt")
+		}
+		if cfg.RBACConfigPath == "" {
+			return errors.New("rbac-config is required when auth-mode=jwt")
 		}
 	default:
 		return fmt.Errorf("unsupported auth-mode %q", cfg.AuthMode)
@@ -70,7 +93,42 @@ func validateRuntimeConfig(cfg *config.Config) error {
 		}
 	}
 
+	if !cfg.MigrateSecretsKey && !isLoopbackOnlyAddr(cfg.Addr) && cfg.ManagementAddr == "" {
+		return errors.New("management-addr is required when addr binds to a non-loopback address")
+	}
+
+	if cfg.PprofEnabled && cfg.ManagementAddr == "" {
+		return errors.New("management-addr is required when pprof is enabled")
+	}
+
 	return nil
+}
+
+// isLoopbackOnlyAddr reports whether addr binds exclusively to a loopback
+// interface. Examples:
+//
+//	"127.0.0.1:8080" → true   (IPv4 loopback)
+//	"[::1]:8080"     → true   (IPv6 loopback)
+//	"localhost:8080"  → true
+//	":8080"          → false  (all interfaces)
+//	"0.0.0.0:8080"   → false  (all interfaces)
+//	"10.0.0.1:8080"  → false  (external)
+func isLoopbackOnlyAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr // bare host without port
+	}
+
+	// ":8080" or "" → binds all interfaces.
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func buildSecretsProvider(ctx context.Context, cfg *config.Config) (engine.SecretsProvider, error) {
@@ -121,12 +179,15 @@ func buildServerOptions(ctx context.Context, cfg *config.Config, store storage.S
 		api.WithHistoryPageSize(cfg.HistoryPageSize),
 		api.WithAuthMode(cfg.AuthMode),
 	}
+	if cfg.AuthMode == "single-tenant" {
+		serverOpts = append(serverOpts, api.WithSingleTenantToken(cfg.SingleTenantToken))
+	}
 
 	if cfg.PublicURL != "" {
 		serverOpts = append(serverOpts, api.WithPublicURL(cfg.PublicURL))
 		slog.Info("public URL configured", "url", cfg.PublicURL)
 	}
-	if cfg.PprofEnabled {
+	if cfg.PprofEnabled && cfg.ManagementAddr == "" {
 		serverOpts = append(serverOpts, api.WithPprof())
 	}
 	if cfg.TrustedProxies != "" {

@@ -64,7 +64,8 @@ func startBackendFixture(t *testing.T, dbPath string, masterKey []byte, cfg back
 		t.Fatalf("failed to create engine: %v", err)
 	}
 
-	srv := api.NewServer(mgr, "organization", "test-user", cfg.serverOpts...)
+	serverOpts := append([]api.ServerOption{api.WithSingleTenantToken("test-token")}, cfg.serverOpts...)
+	srv := api.NewServer(mgr, "organization", "test-user", serverOpts...)
 	router := srv.Router()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
