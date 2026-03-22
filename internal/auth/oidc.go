@@ -261,30 +261,7 @@ func (a *oidcAuthenticator) Revalidate(ctx context.Context, refreshToken string)
 		return errors.New("no refresh token available")
 	}
 
-	var newIDToken string
-	var err error
-
-	if a.testRefresher != nil {
-		// Test path: use injected refresher.
-		newIDToken, err = a.testRefresher.Refresh(ctx, refreshToken)
-	} else {
-		// Production path: use oauth2 token source.
-		t := &oauth2.Token{
-			RefreshToken: refreshToken,
-			Expiry:       time.Now().Add(-time.Hour),
-		}
-		newToken, tokenErr := a.oauth2Config.TokenSource(ctx, t).Token()
-		if tokenErr != nil {
-			return fmt.Errorf("refresh rejected: %w", tokenErr)
-		}
-		idTokenRaw, ok := newToken.Extra("id_token").(string)
-		if !ok || idTokenRaw == "" {
-			return errors.New("no id_token in refresh response")
-		}
-		newIDToken = idTokenRaw
-		err = nil
-	}
-
+	newIDToken, err := a.refreshIDToken(ctx, refreshToken)
 	if err != nil {
 		return fmt.Errorf("refresh rejected: %w", err)
 	}
@@ -296,6 +273,26 @@ func (a *oidcAuthenticator) Revalidate(ctx context.Context, refreshToken string)
 	}
 
 	return nil
+}
+
+// refreshIDToken obtains a fresh ID token using the stored refresh token.
+func (a *oidcAuthenticator) refreshIDToken(ctx context.Context, refreshToken string) (string, error) {
+	if a.testRefresher != nil {
+		return a.testRefresher.Refresh(ctx, refreshToken)
+	}
+	t := &oauth2.Token{
+		RefreshToken: refreshToken,
+		Expiry:       time.Now().Add(-time.Hour),
+	}
+	newToken, err := a.oauth2Config.TokenSource(ctx, t).Token()
+	if err != nil {
+		return "", err
+	}
+	idToken, ok := newToken.Extra("id_token").(string)
+	if !ok || idToken == "" {
+		return "", errors.New("no id_token in refresh response")
+	}
+	return idToken, nil
 }
 
 // AuthCodeURL builds the provider's authorization URL for browser/CLI login.

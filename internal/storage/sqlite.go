@@ -367,7 +367,10 @@ func (s *SQLiteStore) CreateStack(ctx context.Context, st *Stack) error {
 		return err
 	}
 
-	tagsJSON, _ := json.Marshal(st.Tags)
+	tagsJSON, err := json.Marshal(st.Tags)
+	if err != nil {
+		return fmt.Errorf("marshal tags: %w", err)
+	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO stacks (org_name, project_name, name, tags, current_version, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, 0, ?, ?)`,
@@ -522,8 +525,11 @@ func splitToken(token string) []string {
 }
 
 func (s *SQLiteStore) UpdateStackTags(ctx context.Context, org, project, stack string, tags map[string]string) error {
-	tagsJSON, _ := json.Marshal(tags)
-	_, err := s.db.ExecContext(ctx,
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return fmt.Errorf("marshal tags: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx,
 		`UPDATE stacks SET tags=?, updated_at=? WHERE org_name=? AND project_name=? AND name=?`,
 		string(tagsJSON), time.Now().Unix(), org, project, stack)
 	return err
@@ -1036,7 +1042,10 @@ func (s *SQLiteStore) CreateToken(ctx context.Context, t *Token) error {
 	}
 	groupsJSON := ""
 	if len(t.Groups) > 0 {
-		b, _ := json.Marshal(t.Groups)
+		b, err := json.Marshal(t.Groups)
+		if err != nil {
+			return fmt.Errorf("marshal groups: %w", err)
+		}
 		groupsJSON = string(b)
 	}
 	storedRefresh, err := s.encryptRefreshToken(t.RefreshToken)

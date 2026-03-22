@@ -162,13 +162,7 @@ func isLoopbackOnlyAddr(addr string) bool {
 // setupLogging configures the default, audit, and access loggers.
 // Returns an io.Closer for the audit log file (nil if not file-based).
 func setupLogging(cfg *config.Config) (io.Closer, error) {
-	var logHandler slog.Handler
-	if cfg.LogFormat == "text" {
-		logHandler = slog.NewTextHandler(os.Stdout, nil)
-	} else {
-		logHandler = slog.NewJSONHandler(os.Stdout, nil)
-	}
-	slog.SetDefault(slog.New(logHandler))
+	slog.SetDefault(slog.New(newLogHandler(cfg.LogFormat, os.Stdout)))
 
 	var auditCloser io.Closer
 	if cfg.AuditLogPath != "" {
@@ -191,33 +185,28 @@ func setupLogging(cfg *config.Config) (io.Closer, error) {
 	return auditCloser, nil
 }
 
-// openLogDest opens a log destination by path and returns a slog.Handler and
-// optional closer. Supports "stdout", "stderr", or a file path.
+// openLogDest opens a log destination by path. Returns a handler and optional
+// closer (non-nil only for file paths). Supports "stdout", "stderr", or a file path.
 func openLogDest(path, format string) (slog.Handler, io.Closer, error) {
-	var w io.Writer
-	var closer io.Closer
-
 	switch path {
 	case "stdout":
-		w = os.Stdout
+		return newLogHandler(format, os.Stdout), nil, nil
 	case "stderr":
-		w = os.Stderr
+		return newLogHandler(format, os.Stderr), nil, nil
 	default:
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644) //nolint:gosec // log file, not secrets
 		if err != nil {
 			return nil, nil, err
 		}
-		w = f
-		closer = f
+		return newLogHandler(format, f), f, nil
 	}
+}
 
-	var h slog.Handler
+func newLogHandler(format string, w io.Writer) slog.Handler {
 	if format == "text" {
-		h = slog.NewTextHandler(w, nil)
-	} else {
-		h = slog.NewJSONHandler(w, nil)
+		return slog.NewTextHandler(w, nil)
 	}
-	return h, closer, nil
+	return slog.NewJSONHandler(w, nil)
 }
 
 // --- Secrets ---
