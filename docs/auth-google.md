@@ -111,32 +111,39 @@ You can add `PULUMI_CONSOLE_DOMAIN` to your shell profile to make it permanent.
 
 ## Step 3: Set Up Group-Based RBAC (Optional)
 
-To use Google Workspace groups for RBAC, you need:
+To use Google Workspace groups for RBAC, the backend's service account needs permission to read group memberships. Two approaches:
 
-1. A service account with domain-wide delegation (DWD)
-2. A Workspace super-admin email for impersonation
-3. An RBAC config file
+### Option A: Groups Reader Admin Role (recommended, no DWD)
 
-### 3a: Create a Service Account
+The simplest approach — assign the SA a Workspace admin role that grants group read access. No domain-wide delegation, no SA key files, no admin email configuration.
 
-```bash
-PROJECT_ID=$(gcloud config get project)
+1. Create a service account (or use an existing one):
+   ```bash
+   PROJECT_ID=$(gcloud config get project)
+   SA_EMAIL=pulumi-backend@${PROJECT_ID}.iam.gserviceaccount.com
 
-gcloud iam service-accounts create pulumi-backend \
-  --display-name="Pulumi Backend" \
-  --project=$PROJECT_ID
-```
+   gcloud iam service-accounts create pulumi-backend \
+     --display-name="Pulumi Backend" \
+     --project=$PROJECT_ID
+   ```
 
-### 3b: Configure Domain-Wide Delegation
+2. In [Workspace Admin Console](https://admin.google.com) → Account → Admin roles:
+   - Find the **Groups Reader** role (or create a custom role with Groups > Read permission)
+   - Assign `pulumi-backend@PROJECT_ID.iam.gserviceaccount.com` to this role
 
-**Option A: Keyless DWD (recommended)**
+3. No `--google-admin-email` flag needed. The backend uses the SA's own credentials to call the Admin SDK.
 
-Uses IAM impersonation instead of a service account key file. Works with Workload Identity (GKE), `gcloud` ADC, or any ADC source.
+**Important:** Admin-role mode requires `-google-allowed-domains` — the first domain is used to scope the Admin SDK Groups.List API call. Without it, the API returns no results because the SA has no implicit Workspace identity.
+
+### Option B: Domain-Wide Delegation (DWD)
+
+Use DWD only when the Groups Reader admin role is not available (e.g., Workspace org policy restrictions preventing admin role assignment to service accounts).
+
+**Keyless DWD (preferred for GCE/GKE):**
 
 ```bash
 SA_EMAIL=pulumi-backend@${PROJECT_ID}.iam.gserviceaccount.com
 
-# Enable the IAM Credentials API
 gcloud services enable iamcredentials.googleapis.com --project=$PROJECT_ID
 
 # Grant the SA permission to impersonate itself (needed for signJwt)
@@ -144,17 +151,9 @@ gcloud iam service-accounts add-iam-policy-binding $SA_EMAIL \
   --member="serviceAccount:$SA_EMAIL" \
   --role="roles/iam.serviceAccountTokenCreator" \
   --project=$PROJECT_ID
-
-# If running locally with user ADC, also grant your user the ability to impersonate the SA
-gcloud iam service-accounts add-iam-policy-binding $SA_EMAIL \
-  --member="user:you@yourdomain.com" \
-  --role="roles/iam.serviceAccountTokenCreator" \
-  --project=$PROJECT_ID
 ```
 
-**Option B: Service Account Key File**
-
-If your org policy allows SA key creation:
+**SA Key File (if keyless is not possible):**
 
 ```bash
 gcloud iam service-accounts keys create sa-key.json \
@@ -162,15 +161,15 @@ gcloud iam service-accounts keys create sa-key.json \
   --project=$PROJECT_ID
 ```
 
-### 3c: Enable DWD in Google Workspace Admin Console
+**Enable DWD in Workspace Admin Console:**
 
-1. Go to [admin.google.com](https://admin.google.com) > Security > API Controls > Domain-wide Delegation
+1. Go to [admin.google.com](https://admin.google.com) → Security → API Controls → Domain-wide Delegation
 2. Click "Add new"
 3. Enter the SA's **Client ID** (numeric, found in GCP Console under the SA details)
 4. Add scope: `https://www.googleapis.com/auth/admin.directory.group.readonly`
 5. Click "Authorize"
 
-### 3d: Create Workspace Groups
+### Create Workspace Groups
 
 ```bash
 gcloud identity groups create \
@@ -215,9 +214,19 @@ stackPolicies:
 
 Permission levels: `none < read < write < admin`.
 
-### 3f: Run with Groups + RBAC
+### Run with Groups + RBAC
 
-**Keyless DWD (recommended):**
+**Groups Reader admin role (no DWD):**
+
+```bash
+./pulumi-backend \
+  -auth-mode=google \
+  -google-client-id=YOUR_CLIENT_ID.apps.googleusercontent.com \
+  -google-allowed-domains=yourdomain.com \
+  -rbac-config=rbac.yaml
+```
+
+**Keyless DWD:**
 
 ```bash
 ./pulumi-backend \
@@ -247,7 +256,6 @@ When running on GKE with Workload Identity:
 
 1. Create a Kubernetes service account and bind it to the GCP SA
 2. The pod's ADC will automatically be the GCP SA
-3. Use the `-google-sa-email` flag (the pod's ADC will impersonate the SA for DWD)
 
 ```bash
 # Bind KSA to GSA
@@ -256,7 +264,9 @@ gcloud iam service-accounts add-iam-policy-binding $SA_EMAIL \
   --member="serviceAccount:${PROJECT_ID}.svc.id.goog[NAMESPACE/KSA_NAME]"
 ```
 
-No SA key file needed. The backend uses `google.golang.org/api/impersonate` to call IAM `signJwt` for DWD.
+**With admin-role mode (recommended):** No additional flags needed beyond `-google-allowed-domains`. The SA auto-detects its email from the GCE metadata server and self-impersonates to obtain the Admin SDK scope.
+
+**With DWD:** Add `-google-sa-email` so the backend can impersonate the SA for keyless DWD via IAM `signJwt`. No SA key file needed.
 
 ## All Google Auth Flags
 
@@ -265,7 +275,7 @@ No SA key file needed. The backend uses `google.golang.org/api/impersonate` to c
 | `-google-client-id` | `PULUMI_BACKEND_GOOGLE_CLIENT_ID` | OAuth2 client ID (required) |
 | `-google-client-secret` | `PULUMI_BACKEND_GOOGLE_CLIENT_SECRET` | OAuth2 client secret (required for browser login) |
 | `-google-sa-key` | `PULUMI_BACKEND_GOOGLE_SA_KEY` | Path to SA JSON key for Admin SDK groups |
-| `-google-sa-email` | `PULUMI_BACKEND_GOOGLE_SA_EMAIL` | SA email for keyless DWD via IAM impersonation |
+| `-google-sa-email` | `PULUMI_BACKEND_GOOGLE_SA_EMAIL` | SA email (auto-detected on GCE for admin-role; required for keyless DWD) |
 | `-google-admin-email` | `PULUMI_BACKEND_GOOGLE_ADMIN_EMAIL` | Workspace super-admin email for DWD subject |
 | `-google-allowed-domains` | `PULUMI_BACKEND_GOOGLE_ALLOWED_DOMAINS` | Comma-separated allowed hosted domains |
 | `-google-transitive-groups` | `PULUMI_BACKEND_GOOGLE_TRANSITIVE_GROUPS` | Resolve nested group memberships |
@@ -298,8 +308,9 @@ curl -X DELETE -H "Authorization: token $ADMIN_TOKEN" \
 
 ## Credential Resolution Order
 
-For group resolution, credentials are resolved in this order:
+The groups resolution mode is inferred from the flags you provide:
 
-1. **SA key file** (`-google-sa-key`): Direct JWT credentials with DWD
-2. **SA email** (`-google-sa-email`): ADC + IAM impersonate API for keyless DWD
-3. **Neither**: Plain ADC with DWD (works only when ADC is a SA key)
+1. **No `-google-admin-email`** → **admin-role** mode (recommended). SA self-impersonates to get Admin SDK scope. Domain is taken from `-google-allowed-domains`.
+2. **`-google-admin-email` + `-google-sa-key`** → **dwd-keyfile** mode. SA key file with DWD, Subject set to admin email.
+3. **`-google-admin-email` + `-google-sa-email`** → **dwd-keyless** mode. ADC + IAM impersonate API for keyless DWD.
+4. **`-google-admin-email` only** → **dwd-adc** mode. Plain ADC with DWD Subject (works only when ADC is a SA key file).

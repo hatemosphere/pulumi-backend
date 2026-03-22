@@ -486,18 +486,35 @@ func buildSingleTenantAuth() ([]api.ServerOption, error) {
 func buildGoogleAuth(ctx context.Context, cfg *config.Config, store storage.Store) ([]api.ServerOption, error) {
 	opts := []api.ServerOption{api.WithTokenStore(store)}
 
+	// Build groups resolver if RBAC is configured (needs group memberships)
+	// or if DWD is explicitly configured (admin-email set).
 	var groupsCache *auth.GroupsCache
-	if cfg.GoogleAdminEmail != "" {
-		resolver, err := auth.NewGroupsResolver(
-			ctx, cfg.GoogleSAKeyFile, cfg.GoogleSAEmail, cfg.GoogleAdminEmail, cfg.GoogleTransitiveGroups,
-		)
+	if cfg.RBACConfigPath != "" || cfg.GoogleAdminEmail != "" {
+		mode := auth.InferGoogleGroupsMode(cfg.GoogleSAKeyFile, cfg.GoogleSAEmail, cfg.GoogleAdminEmail)
+		// Only admin-role mode needs the domain on API calls — DWD modes
+		// inherit the domain from the impersonated Subject.
+		var domain string
+		if mode == "admin-role" {
+			if domains := parseCSVList(cfg.GoogleAllowedDomains); len(domains) > 0 {
+				domain = domains[0]
+			}
+		}
+		groupsCfg := auth.GoogleGroupsConfig{
+			Mode:       mode,
+			SAKeyFile:  cfg.GoogleSAKeyFile,
+			SAEmail:    cfg.GoogleSAEmail,
+			AdminEmail: cfg.GoogleAdminEmail,
+			Domain:     domain,
+			Transitive: cfg.GoogleTransitiveGroups,
+		}
+		resolver, err := auth.NewGoogleGroupsResolver(ctx, groupsCfg)
 		if err != nil {
 			return nil, fmt.Errorf("create groups resolver: %w", err)
 		}
 		groupsCache = auth.NewGroupsCache(resolver, cfg.GroupsCacheTTL)
 		slog.Info("google groups resolution enabled",
-			"admin_email", cfg.GoogleAdminEmail,
-			"transitive", cfg.GoogleTransitiveGroups,
+			"mode", groupsCfg.Mode,
+			"transitive", groupsCfg.Transitive,
 		)
 	}
 
