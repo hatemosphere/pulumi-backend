@@ -86,3 +86,18 @@ func (c *GroupsCache) ResolveGroups(ctx context.Context, email string) ([]string
 	}
 	return groups, nil
 }
+
+// InvalidateUser removes the cached groups for a specific user,
+// forcing a fresh resolve on the next request.
+func (c *GroupsCache) InvalidateUser(email string) {
+	c.mu.Lock()
+	delete(c.cache, email)
+	c.mu.Unlock()
+}
+
+// InvalidateAll clears the entire groups cache.
+func (c *GroupsCache) InvalidateAll() {
+	c.mu.Lock()
+	c.cache = make(map[string]*cachedGroups)
+	c.mu.Unlock()
+}

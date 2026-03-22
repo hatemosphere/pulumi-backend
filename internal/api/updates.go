@@ -566,6 +566,34 @@ func (s *Server) registerAdmin(api huma.API) {
 	if s.tokenStore != nil {
 		s.registerAdminTokens(api)
 	}
+
+	// Groups cache invalidation (only available when groups cache is configured).
+	if s.groupsCache != nil {
+		huma.Register(api, huma.Operation{
+			OperationID:   "invalidateGroupsCache",
+			Method:        http.MethodPost,
+			Path:          "/api/admin/groups-cache/invalidate",
+			Tags:          []string{"Admin"},
+			DefaultStatus: 200,
+		}, func(ctx context.Context, input *struct {
+			Body struct {
+				UserName string `json:"userName,omitempty" doc:"Invalidate a specific user (empty = invalidate all)"`
+			}
+		},
+		) (*struct{}, error) {
+			if err := s.requireAdmin(ctx); err != nil {
+				return nil, err
+			}
+			if input.Body.UserName != "" {
+				s.groupsCache.InvalidateUser(input.Body.UserName)
+				slog.Info("groups cache invalidated", "user", input.Body.UserName)
+			} else {
+				s.groupsCache.InvalidateAll()
+				slog.Info("groups cache invalidated (all)")
+			}
+			return nil, nil
+		})
+	}
 }
 
 func (s *Server) registerAdminTokens(api huma.API) {

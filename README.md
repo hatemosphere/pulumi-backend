@@ -267,7 +267,7 @@ For `google`, `oidc`, and `jwt` modes, `-rbac-config` is required so multi-user 
 
 ## API compatibility
 
-Implements the subset of the Pulumi Cloud API that the CLI actually uses:
+Implements the Pulumi Cloud HTTP API subset that the CLI uses. Tested against CLI v3.227.0.
 
 - Stack CRUD, tags, rename
 - State export/import (full and versioned)
@@ -277,23 +277,27 @@ Implements the subset of the Pulumi Cloud API that the CLI actually uses:
 - Batch encrypt/decrypt
 - Update history with pagination
 - User/org endpoints
-- Authentication (single-tenant, Google OIDC, generic OIDC, JWT)
-- Browser login page (`GET /login`) and automatic CLI login (`GET /cli-login`) with any OIDC provider
-- RBAC (group-based, with stack-level policy overrides)
 - User token self-service (`GET/POST/DELETE /api/user/tokens`)
-- Admin token management (`GET/DELETE /api/admin/tokens/{userName}`)
 - Read-only teams and roles (`GET /api/orgs/{orgName}/teams`, `GET /api/orgs/{orgName}/roles`)
-- OIDC refresh token re-validation (detects deactivated users mid-session)
-- Structured audit logging (actor, action, resource, IP for all mutating operations)
-- Health probes (`GET /healthz` liveness, `GET /readyz` readiness with DB ping) — optional separate management port
-- Prometheus metrics (`/metrics`) — HTTP, stack operations, update duration, checkpoint size histograms
-- OpenTelemetry tracing (HTTP spans via `otelhttp`, engine-level business operation spans, SQL query spans via `otelsql`)
 - OpenAPI 3.1 spec (`GET /api/openapi`)
-- Database backup (`POST /api/admin/backup`) with S3-compatible remote upload, scheduled backups, and retention management
-- Secrets key migration (`--migrate-secrets-key` for local key rotation and local↔KMS migration)
-- Automatic TLS via ACME/Let's Encrypt with SQLite-backed cert cache
 
-Tested against Pulumi CLI v3.227.0.
+### pulumi-backend extensions
+
+Endpoints and features specific to this backend (not part of Pulumi Cloud API):
+
+- Authentication: single-tenant token, Google OIDC, generic OIDC, JWT
+- Browser login (`GET /login`) and automatic CLI login (`GET /cli-login`)
+- RBAC with Google Workspace groups (Groups Reader admin role or DWD)
+- OIDC refresh token re-validation (detects deactivated users mid-session)
+- Admin token management (`GET/DELETE /api/admin/tokens/{userName}`)
+- Groups cache invalidation (`POST /api/admin/groups-cache/invalidate`)
+- Database backup (`POST /api/admin/backup`) with S3/GCS remote upload, scheduling, and retention
+- Secrets key migration (`--migrate-secrets-key` for key rotation and local↔KMS migration)
+- Structured audit logging (actor, action, resource, IP)
+- Health probes (`GET /healthz`, `GET /readyz`) with optional management port
+- Prometheus metrics (`/metrics`)
+- OpenTelemetry tracing (HTTP, engine, SQL spans)
+- Automatic TLS via ACME/Let's Encrypt
 
 ## Audit logging
 

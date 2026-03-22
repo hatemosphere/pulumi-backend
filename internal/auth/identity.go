@@ -4,11 +4,11 @@ import "context"
 
 // UserIdentity represents an authenticated user and their resolved permissions.
 type UserIdentity struct {
-	UserName  string   // email (Google mode) or configured default user (single-tenant)
-	Groups    []string // Google Workspace group emails (empty in single-tenant mode)
-	TokenHash string   // SHA-256 hash of the access token used for this request
-	IsAdmin      bool // true in single-tenant mode — bypasses all RBAC checks
-	IsUpdateToken bool // true for update-scoped capability tokens — bypass RBAC
+	UserName      string   // email (Google mode) or configured default user (single-tenant)
+	Groups        []string // Google Workspace group emails (empty in single-tenant mode)
+	TokenHash     string   // SHA-256 hash of the access token used for this request
+	IsAdmin       bool     // true in single-tenant mode — bypasses all RBAC checks
+	IsUpdateToken bool     // true for update-scoped capability tokens — bypass RBAC
 }
 
 type (

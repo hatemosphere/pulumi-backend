@@ -290,20 +290,33 @@ Backend tokens are issued during Google OAuth login and stored in SQLite.
 - **Refresh token re-validation**: When users log in via the browser (`/login`) or CLI (`/cli-login`), the backend stores Google's OAuth2 refresh token alongside the backend token. On each authenticated request past half the token's TTL, the backend asynchronously re-validates against Google by exchanging the refresh token for a new ID token. If Google rejects the refresh (user deactivated, consent revoked), the backend token is immediately deleted. This follows the same pattern as [Dex's Google connector](https://github.com/dexidp/dex/blob/master/connector/google/google.go).
 - **Deactivated users**: With refresh token re-validation, deactivated users are detected within half the token TTL. Without a refresh token (programmatic `POST /api/auth/token-exchange` flow), existing tokens remain valid until they expire.
 - **Admin revocation**: Admins can immediately revoke all tokens for a user via `DELETE /api/admin/tokens/{userName}`. List a user's tokens via `GET /api/admin/tokens/{userName}`.
+- **Groups cache invalidation**: Admins can force-refresh group memberships via `POST /api/admin/groups-cache/invalidate`. Useful after adding/removing users from Workspace groups — takes effect immediately instead of waiting for the cache TTL.
 - **Short TTL**: Use a short `-token-ttl` (e.g. `1h`) for tighter security.
 
-### Admin Token Management
+### Admin Endpoints
 
 Requires RBAC admin permission (or single-tenant mode).
 
 ```bash
 # List a user's tokens
 curl -H "Authorization: token $ADMIN_TOKEN" \
-  http://localhost:8080/api/admin/tokens/user@example.com
+  https://pulumi.example.com/api/admin/tokens/user@example.com
 
 # Revoke all tokens for a user
 curl -X DELETE -H "Authorization: token $ADMIN_TOKEN" \
-  http://localhost:8080/api/admin/tokens/user@example.com
+  https://pulumi.example.com/api/admin/tokens/user@example.com
+
+# Invalidate groups cache for a specific user (immediate RBAC re-evaluation)
+curl -X POST -H "Authorization: token $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"userName":"user@example.com"}' \
+  https://pulumi.example.com/api/admin/groups-cache/invalidate
+
+# Invalidate entire groups cache
+curl -X POST -H "Authorization: token $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{}' \
+  https://pulumi.example.com/api/admin/groups-cache/invalidate
 ```
 
 ## Credential Resolution Order
