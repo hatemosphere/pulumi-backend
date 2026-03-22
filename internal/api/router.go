@@ -437,7 +437,8 @@ func (s *Server) handleUpdateTokenHuma(api huma.API, ctx huma.Context, next func
 		return true
 	}
 	identity := &auth.UserIdentity{
-		UserName: "update-agent",
+		UserName:      "update-agent",
+		IsUpdateToken: true,
 	}
 	next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
 	return true

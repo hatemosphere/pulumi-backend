@@ -50,9 +50,11 @@ func (r *RBACResolver) Resolve(identity *UserIdentity, org, project, stack strin
 
 	stackPath := org + "/" + project + "/" + stack
 
-	// Admin users (single-tenant mode) bypass RBAC entirely.
-	if identity.IsAdmin {
-		slog.Debug("RBAC bypass: user is admin", "user", identity.UserName, "stack", stackPath)
+	// Admin users (single-tenant mode) and update-tokens bypass RBAC entirely.
+	// Update-tokens are already authorized by the lease system — the user who
+	// started the update was RBAC-checked at that point.
+	if identity.IsAdmin || identity.IsUpdateToken {
+		slog.Debug("RBAC bypass", "user", identity.UserName, "reason", "admin or update-token", "stack", stackPath)
 		return PermissionAdmin
 	}
 	if r.config == nil {
