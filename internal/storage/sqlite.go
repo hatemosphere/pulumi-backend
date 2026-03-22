@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -49,11 +50,24 @@ type SQLiteStoreConfig struct {
 	StackListPageSize int // 0 = default (100)
 }
 
+// TokenEncryptor encrypts and decrypts refresh tokens at rest.
+// Encryption uses AES-256-GCM; the ciphertext is stored as hex in the TEXT column.
+type TokenEncryptor struct {
+	seal func(plaintext []byte) ([]byte, error)
+	open func(ciphertext []byte) ([]byte, error)
+}
+
+// NewTokenEncryptor creates an encryptor from seal/open functions (typically aesGCMSeal/aesGCMOpen).
+func NewTokenEncryptor(seal func([]byte) ([]byte, error), open func([]byte) ([]byte, error)) *TokenEncryptor {
+	return &TokenEncryptor{seal: seal, open: open}
+}
+
 type SQLiteStore struct {
 	db                *sql.DB
 	dsn               string
 	maxStateVersions  int
 	stackListPageSize int
+	tokenEncryptor    *TokenEncryptor
 }
 
 func NewSQLiteStore(path string, cfgs ...SQLiteStoreConfig) (*SQLiteStore, error) {
@@ -122,6 +136,40 @@ func (s *SQLiteStore) enableChecksums() error {
 	return s.rawConn(context.Background(), func(c sqlitedriver.Conn) error {
 		return c.Raw().EnableChecksums("main")
 	})
+}
+
+// SetTokenEncryptor enables at-rest encryption for refresh tokens.
+// Must be called before any token operations. Not safe for concurrent use during setup.
+func (s *SQLiteStore) SetTokenEncryptor(enc *TokenEncryptor) {
+	s.tokenEncryptor = enc
+}
+
+// encryptRefreshToken encrypts a refresh token for storage. Returns empty string if input is empty.
+func (s *SQLiteStore) encryptRefreshToken(plaintext string) (string, error) {
+	if plaintext == "" || s.tokenEncryptor == nil {
+		return plaintext, nil
+	}
+	ct, err := s.tokenEncryptor.seal([]byte(plaintext))
+	if err != nil {
+		return "", fmt.Errorf("encrypt refresh token: %w", err)
+	}
+	return hex.EncodeToString(ct), nil
+}
+
+// decryptRefreshToken decrypts a stored refresh token. Returns empty string if input is empty.
+func (s *SQLiteStore) decryptRefreshToken(stored string) (string, error) {
+	if stored == "" || s.tokenEncryptor == nil {
+		return stored, nil
+	}
+	ct, err := hex.DecodeString(stored)
+	if err != nil {
+		return "", fmt.Errorf("decode refresh token: %w", err)
+	}
+	pt, err := s.tokenEncryptor.open(ct)
+	if err != nil {
+		return "", fmt.Errorf("decrypt refresh token: %w", err)
+	}
+	return string(pt), nil
 }
 
 func (s *SQLiteStore) Close() error {
@@ -972,21 +1020,30 @@ func (s *SQLiteStore) CreateToken(ctx context.Context, t *Token) error {
 		b, _ := json.Marshal(t.Groups)
 		groupsJSON = string(b)
 	}
-	_, err := s.db.ExecContext(ctx,
+	storedRefresh, err := s.encryptRefreshToken(t.RefreshToken)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO tokens (token_hash, user_name, description, refresh_token, groups, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		t.TokenHash, t.UserName, t.Description, t.RefreshToken, groupsJSON, time.Now().Unix(), expiresAt)
+		t.TokenHash, t.UserName, t.Description, storedRefresh, groupsJSON, time.Now().Unix(), expiresAt)
 	return err
 }
 
-// scanToken scans a token row into a Token struct from any scanner (row or rows).
-func scanToken(scan func(dest ...any) error) (Token, error) {
+// scanToken scans a token row into a Token struct, decrypting the refresh token if an encryptor is set.
+func (s *SQLiteStore) scanToken(scan func(dest ...any) error) (Token, error) {
 	var t Token
 	var createdAt int64
 	var lastUsedAt, expiresAt *int64
 	var groupsJSON string
-	err := scan(&t.TokenHash, &t.UserName, &t.Description, &t.RefreshToken, &groupsJSON, &createdAt, &lastUsedAt, &expiresAt)
+	var storedRefresh string
+	err := scan(&t.TokenHash, &t.UserName, &t.Description, &storedRefresh, &groupsJSON, &createdAt, &lastUsedAt, &expiresAt)
 	if err != nil {
 		return Token{}, err
+	}
+	t.RefreshToken, err = s.decryptRefreshToken(storedRefresh)
+	if err != nil {
+		return Token{}, fmt.Errorf("token %s: %w", t.TokenHash[:8], err)
 	}
 	if groupsJSON != "" {
 		if err := json.Unmarshal([]byte(groupsJSON), &t.Groups); err != nil {
@@ -1004,7 +1061,7 @@ func (s *SQLiteStore) GetToken(ctx context.Context, tokenHash string) (*Token, e
 		`SELECT token_hash, user_name, description, refresh_token, groups, created_at, last_used_at, expires_at FROM tokens WHERE token_hash=?`,
 		tokenHash)
 
-	t, err := scanToken(row.Scan)
+	t, err := s.scanToken(row.Scan)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1047,7 +1104,7 @@ func (s *SQLiteStore) ListTokensByUser(ctx context.Context, userName string) ([]
 
 	var tokens []Token
 	for rows.Next() {
-		t, err := scanToken(rows.Scan)
+		t, err := s.scanToken(rows.Scan)
 		if err != nil {
 			return nil, err
 		}

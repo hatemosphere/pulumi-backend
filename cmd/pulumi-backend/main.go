@@ -104,6 +104,12 @@ func main() {
 		defer closer.Close()
 	}
 
+	// Enable at-rest encryption for refresh tokens using the secrets provider.
+	store.SetTokenEncryptor(storage.NewTokenEncryptor(
+		func(pt []byte) ([]byte, error) { return secretsProvider.WrapKey(context.Background(), pt) },
+		func(ct []byte) ([]byte, error) { return secretsProvider.UnwrapKey(context.Background(), ct) },
+	))
+
 	// Secrets key migration: re-wrap all per-stack DEKs from old to new provider, then exit.
 	if cfg.MigrateSecretsKey {
 		oldProvider, err := buildOldSecretsProvider(cfg)
