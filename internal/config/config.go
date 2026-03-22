@@ -21,6 +21,10 @@ type Config struct {
 	TLS       bool
 	CertFile  string
 	KeyFile   string
+	// ACME automatic TLS (mutually exclusive with CertFile/KeyFile).
+	ACMEDomain string // domain to provision via ACME (empty = disabled)
+	ACMEEmail  string // contact email for ACME account
+	ACMECA     string // ACME directory URL (empty = Let's Encrypt production)
 	// Default user/org when running in single-tenant mode.
 	DefaultOrg  string
 	DefaultUser string
@@ -128,6 +132,9 @@ func ParseArgs(args []string, warningWriter io.Writer) (*Config, error) {
 	fs.BoolVar(&c.TLS, "tls", false, "enable TLS")
 	fs.StringVar(&c.CertFile, "cert", "", "TLS certificate file")
 	fs.StringVar(&c.KeyFile, "key", "", "TLS key file")
+	fs.StringVar(&c.ACMEDomain, "acme-domain", "", "domain for automatic TLS via ACME (e.g. pulumi.example.com)")
+	fs.StringVar(&c.ACMEEmail, "acme-email", "", "contact email for ACME account")
+	fs.StringVar(&c.ACMECA, "acme-ca", "", "ACME directory URL (default: Let's Encrypt production)")
 	fs.StringVar(&c.DefaultOrg, "org", "organization", "default organization name")
 	fs.StringVar(&c.DefaultUser, "user", "admin", "default user name")
 

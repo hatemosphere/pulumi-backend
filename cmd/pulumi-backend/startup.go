@@ -23,7 +23,14 @@ func validateRuntimeConfig(cfg *config.Config) error {
 		cfg.Addr = ":8080"
 	}
 
-	if cfg.TLS {
+	if cfg.ACMEDomain != "" {
+		if cfg.TLS {
+			return errors.New("acme-domain and tls/cert/key are mutually exclusive")
+		}
+		cfg.TLS = true // ACME implies TLS
+	}
+
+	if cfg.TLS && cfg.ACMEDomain == "" {
 		if cfg.CertFile == "" || cfg.KeyFile == "" {
 			return errors.New("cert and key are required when tls is enabled")
 		}

@@ -205,6 +205,11 @@ func (s *SQLiteStore) SetConfig(ctx context.Context, key, value string) error {
 	return err
 }
 
+func (s *SQLiteStore) DeleteConfig(ctx context.Context, key string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM server_config WHERE key = ?`, key)
+	return err
+}
+
 func (s *SQLiteStore) migrate() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return err

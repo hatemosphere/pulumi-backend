@@ -18,6 +18,9 @@ import (
 
 	"github.com/segmentio/encoding/json"
 
+	"golang.org/x/crypto/acme"
+	"golang.org/x/crypto/acme/autocert"
+
 	"github.com/hatemosphere/pulumi-backend/internal/api"
 	"github.com/hatemosphere/pulumi-backend/internal/audit"
 	"github.com/hatemosphere/pulumi-backend/internal/config"
@@ -219,6 +222,38 @@ func main() {
 		IdleTimeout:       2 * time.Minute,
 	}
 
+	// Configure ACME automatic TLS if requested.
+	if cfg.ACMEDomain != "" {
+		m := &autocert.Manager{
+			Cache:      storage.NewACMECache(store),
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(cfg.ACMEDomain),
+			Email:      cfg.ACMEEmail,
+		}
+		if cfg.ACMECA != "" {
+			m.Client = &acme.Client{DirectoryURL: cfg.ACMECA}
+		}
+		httpServer.TLSConfig = m.TLSConfig()
+
+		// Serve HTTP-01 challenges on port 80 (+ redirect to HTTPS).
+		go func() {
+			h := m.HTTPHandler(nil)
+			challengeServer := &http.Server{
+				Addr:              ":80",
+				Handler:           h,
+				ReadHeaderTimeout: 5 * time.Second,
+				ReadTimeout:       5 * time.Second,
+				WriteTimeout:      5 * time.Second,
+			}
+			slog.Info("ACME HTTP-01 challenge server starting", "addr", ":80", "domain", cfg.ACMEDomain)
+			if err := challengeServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Error("ACME challenge server error", "error", err)
+			}
+		}()
+
+		slog.Info("ACME automatic TLS enabled", "domain", cfg.ACMEDomain, "cache", "sqlite")
+	}
+
 	// Start separate management server for health probes and metrics.
 	var mgmtServer *http.Server
 	if cfg.ManagementAddr != "" {
@@ -289,7 +324,9 @@ func main() {
 	slog.Info("pulumi backend starting", "addr", cfg.Addr, "version", version, "commit", commit)
 	slog.Info("login command", "cmd", "pulumi login http://localhost"+cfg.Addr) //nolint:gosec // structured logger
 
-	if cfg.TLS {
+	if cfg.ACMEDomain != "" {
+		err = httpServer.ListenAndServeTLS("", "") // certs from autocert TLSConfig
+	} else if cfg.TLS {
 		err = httpServer.ListenAndServeTLS(cfg.CertFile, cfg.KeyFile)
 	} else {
 		err = httpServer.ListenAndServe()

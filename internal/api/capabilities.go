@@ -40,7 +40,7 @@ func (s *Server) registerCapabilities(api huma.API) {
 		Tags:        []string{"Capabilities"},
 	}, func(ctx context.Context, input *struct{}) (*GetCLIVersionOutput, error) {
 		out := &GetCLIVersionOutput{}
-		out.Body.LatestVersion = "3.211.0"
+		out.Body.LatestVersion = "3.227.0"
 		out.Body.OldestWithoutWarning = "3.0.0"
 		out.Body.LatestDevVersion = ""
 		return out, nil

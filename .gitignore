@@ -39,3 +39,4 @@ benchmarks/results/
 
 # Go
 vendor/
+pulumi-backend-linux-amd64
