@@ -278,11 +278,11 @@ func (s *Server) Router() http.Handler {
 
 // registerPublicRoutes registers unauthenticated huma operations.
 func (s *Server) registerPublicRoutes(api huma.API) {
-	// Health check (backward-compatible root endpoint).
+	// Health check (exact root path only — {$} prevents catch-all matching).
 	huma.Register(api, huma.Operation{
 		OperationID: "healthCheck",
 		Method:      http.MethodGet,
-		Path:        "/",
+		Path:        "/{$}",
 		Tags:        []string{"Health"},
 	}, func(ctx context.Context, input *struct{}) (*HealthCheckOutput, error) {
 		out := &HealthCheckOutput{}

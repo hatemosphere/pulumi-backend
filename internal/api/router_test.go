@@ -154,6 +154,33 @@ func TestWrongMethodReturnsError(t *testing.T) {
 	assert.NotEqual(t, http.StatusOK, rec.Code)
 }
 
+func TestUnknownPathReturns404(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	for _, path := range []string{"/.env.backup", "/backup/.env", "/stripe.json", "/nonexistent"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+			srv.Router().ServeHTTP(rec, req)
+
+			assert.NotEqual(t, http.StatusOK, rec.Code, "unknown path %s should not return 200", path)
+		})
+	}
+}
+
+func TestRootHealthCheckUsedByCLILogin(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	// Pulumi CLI hits GET / during `pulumi login` to verify the backend is reachable.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.Router().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	assert.Contains(t, rec.Body.String(), `"status"`)
+}
+
 func TestPublicHealthAndCapabilitiesHandlers(t *testing.T) {
 	srv, _ := newTestServer(t)
 
