@@ -1,5 +1,24 @@
 # pulumi-backend
 
+<!-- cli-compat:start -->
+## CLI Compatibility
+Tested smoke suite `^TestCLICompat_` against Pulumi CLI releases. Current stable at check time: `3.228.0`.
+
+[![Pulumi CLI 3.210.0](https://img.shields.io/badge/Pulumi_CLI_3.210.0-compatible-brightgreen)](https://github.com/pulumi/pulumi/releases/tag/v3.210.0)
+[![Pulumi CLI 3.220.0](https://img.shields.io/badge/Pulumi_CLI_3.220.0-compatible-brightgreen)](https://github.com/pulumi/pulumi/releases/tag/v3.220.0)
+[![Pulumi CLI 3.225.1](https://img.shields.io/badge/Pulumi_CLI_3.225.1-compatible-brightgreen)](https://github.com/pulumi/pulumi/releases/tag/v3.225.1)
+[![Pulumi CLI 3.228.0](https://img.shields.io/badge/Pulumi_CLI_3.228.0-compatible-brightgreen)](https://github.com/pulumi/pulumi/releases/tag/v3.228.0)
+
+| Version | Status |
+|---|---|
+| `3.210.0` | `compatible` |
+| `3.220.0` | `compatible` |
+| `3.225.1` | `compatible` |
+| `3.228.0` | `compatible` |
+
+Source: https://www.pulumi.com/docs/get-started/download-install/versions/ (checked 2026-03-26).
+<!-- cli-compat:end -->
+
 A self-hosted Pulumi state backend implementing the Pulumi Cloud HTTP API. Single binary, SQLite storage, journaling checkpoint protocol. Deploys anywhere — laptop, VM, Cloud Run, Kubernetes.
 
 ## Performance
@@ -267,7 +286,17 @@ For `google`, `oidc`, and `jwt` modes, `-rbac-config` is required so multi-user 
 
 ## API compatibility
 
-Implements the Pulumi Cloud HTTP API subset that the CLI uses. Tested against CLI v3.227.0.
+Implements the Pulumi Cloud HTTP API subset that the CLI uses.
+
+Compatibility is checked in three layers:
+
+- Cross-version CLI smoke suite (`^TestCLICompat_`) against a verified Pulumi CLI matrix:
+  - `3.210.0`
+  - `3.220.0`
+  - `3.225.1`
+  - `3.228.0`
+- Vendored Pulumi HTTP client contract snapshot from `reference/pulumi/pkg/backend/httpstate/client/api_endpoints.go`
+- Optional comparison against the official Pulumi Cloud OpenAPI spec via `pulumi-spec.json`
 
 - Stack CRUD, tags, rename
 - State export/import (full and versioned)
@@ -290,6 +319,7 @@ Endpoints and features specific to this backend (not part of Pulumi Cloud API):
 - RBAC with Google Workspace groups (Groups Reader admin role or DWD)
 - OIDC refresh token re-validation (detects deactivated users mid-session)
 - Admin token management (`GET/DELETE /api/admin/tokens/{userName}`)
+- CLI compatibility matrix tooling and generated README badges
 - Groups cache invalidation (`POST /api/admin/groups-cache/invalidate`)
 - Database backup (`POST /api/admin/backup`) with S3/GCS remote upload, scheduling, and retention
 - Secrets key migration (`--migrate-secrets-key` for key rotation and local↔KMS migration)
@@ -324,12 +354,52 @@ High-frequency machine-generated operations (checkpoints, journal entries, event
 ```bash
 go test ./internal/...                                    # unit tests
 go test -timeout 120s ./tests/ -count=1                   # API + auth + reliability tests (CLI tests auto-skip if pulumi not in PATH)
+go test -v ./tests/ -run '^TestCLICompat_'                 # CLI smoke/compat suite
+go test -v ./tests/ -run TestPulumiHTTPContractSnapshotUpToDate
+                                                       # vendored Pulumi HTTP client contract snapshot freshness
 go test -v ./tests/ -run TestAPISpecSchemaCompliance       # OpenAPI spec compliance
-go test -v ./tests/ -run TestCLIErrorSemantics             # CLI error message compatibility
 go test -v ./tests/ -run TestDeclaredErrorCodes            # error code coverage + exercised
 go test -v ./tests/ -run TestReliability                   # state consistency / reliability tests
 go test -bench . -benchmem -timeout 120s ./tests/          # benchmarks (engine + HTTP)
 ```
+
+### CLI compatibility matrix
+
+The smoke suite in `tests/cli_compat_test.go` is designed to run against arbitrary Pulumi CLI binaries.
+
+```bash
+PULUMI_CLI_PATH=/path/to/pulumi go test ./tests -run '^TestCLICompat_' -count=1
+```
+
+To refresh the checked-in CLI compatibility matrix and README badges:
+
+```bash
+go run ./cmd/run-cli-compat-matrix
+```
+
+To refresh the vendored Pulumi HTTP contract snapshot from `reference/pulumi`:
+
+```bash
+go run ./cmd/dump-pulumi-http-contract
+```
+
+The generated files are:
+
+- `tests/testdata/cli_compat_matrix.json`
+- `tests/testdata/pulumi_http_contract.json`
+- the badge section at the top of this README
+
+### CI
+
+CI runs:
+
+- `go build ./...`
+- `golangci-lint`
+- unit tests (`./internal/...`)
+- spec/contract tests
+- full integration tests with Pulumi CLI `3.228.0`
+- CLI compatibility smoke tests across the verified matrix
+- generated compatibility metadata checks (README badges, CLI matrix JSON, vendored contract snapshot)
 
 ### Reliability tests
 

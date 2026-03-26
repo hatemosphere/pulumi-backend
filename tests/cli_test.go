@@ -11,6 +11,10 @@ import (
 	"testing"
 )
 
+// Feature/depth CLI tests.
+// These cover specific workflows and edge cases in more detail than the
+// smaller cross-version smoke suite in cli_compat_test.go.
+
 // ===== Login & User =====
 
 func TestLoginAndUserInfo(t *testing.T) {

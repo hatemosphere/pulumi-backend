@@ -1,0 +1,28 @@
+{
+  "source": {
+    "versionsPage": "https://www.pulumi.com/docs/get-started/download-install/versions/",
+    "currentStable": "3.228.0",
+    "checkedDate": "2026-03-26"
+  },
+  "testPattern": "^TestCLICompat_",
+  "versions": [
+    "3.210.0",
+    "3.220.0",
+    "3.225.1",
+    "3.228.0"
+  ],
+  "results": {
+    "3.210.0": {
+      "status": "compatible"
+    },
+    "3.220.0": {
+      "status": "compatible"
+    },
+    "3.225.1": {
+      "status": "compatible"
+    },
+    "3.228.0": {
+      "status": "compatible"
+    }
+  }
+}

@@ -1,0 +1,217 @@
+{
+  "pulumiGitCommit": "89aea10ba6c3861409ac73b65aad738d56b7d363",
+  "pulumiSdkVersion": "3.226.0",
+  "sourceFile": "reference/pulumi/pkg/backend/httpstate/client/api_endpoints.go",
+  "endpoints": [
+    {
+      "method": "DELETE",
+      "path": "/api/registry/packages/{source}/{publisher}/{name}/versions/{version}",
+      "name": "deletePackageVersion"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}",
+      "name": "deleteStack"
+    },
+    {
+      "method": "GET",
+      "path": "/api/capabilities",
+      "name": "getCapabilities"
+    },
+    {
+      "method": "GET",
+      "path": "/api/orgs/{orgName}/search/resources",
+      "name": "getSearchResources"
+    },
+    {
+      "method": "GET",
+      "path": "/api/orgs/{orgName}/search/resources/parse",
+      "name": "getSearchResourcesParse"
+    },
+    {
+      "method": "GET",
+      "path": "/api/orgs/{orgName}/templates",
+      "name": "listTemplates"
+    },
+    {
+      "method": "GET",
+      "path": "/api/orgs/{orgName}/templates/download",
+      "name": "downloadTemplates"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stacks/{orgName}",
+      "name": "listOrganizationStacks"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}",
+      "name": "getStack"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/export",
+      "name": "exportStack"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/logs",
+      "name": "getStackLogs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/updates",
+      "name": "getStackUpdates"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/updates/latest",
+      "name": "getLatestStackUpdate"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/updates/{version}",
+      "name": "getStackUpdate"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/updates/{version}/contents/file/{path:.*}",
+      "name": "getUpdateContentsFilePath"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/updates/{version}/contents/files",
+      "name": "getUpdateContentsFiles"
+    },
+    {
+      "method": "GET",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}",
+      "name": "getUpdateStatus"
+    },
+    {
+      "method": "GET",
+      "path": "/api/user",
+      "name": "getCurrentUser"
+    },
+    {
+      "method": "GET",
+      "path": "/api/user/organizations/default",
+      "name": "getDefaultOrg"
+    },
+    {
+      "method": "GET",
+      "path": "/api/user/stacks",
+      "name": "listUserStacks"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/checkpoint",
+      "name": "patchCheckpoint"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/checkpointdelta",
+      "name": "patchCheckpointDelta"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/checkpointverbatim",
+      "name": "patchCheckpointVerbatim"
+    },
+    {
+      "method": "POST",
+      "path": "/api/orgs/{orgName}/policypacks",
+      "name": "publishPolicyPack"
+    },
+    {
+      "method": "POST",
+      "path": "/api/preview/registry/packages/{source}/{publisher}/{name}/versions",
+      "name": "publishPackage"
+    },
+    {
+      "method": "POST",
+      "path": "/api/preview/registry/packages/{source}/{publisher}/{name}/versions/{version}/complete",
+      "name": "completePackagePublish"
+    },
+    {
+      "method": "POST",
+      "path": "/api/registry/templates/{source}/{publisher}/{name}/versions",
+      "name": "publishTemplate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/registry/templates/{source}/{publisher}/{name}/versions/{version}/complete",
+      "name": "completeTemplatePublish"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}",
+      "name": "createStack"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/batch-decrypt",
+      "name": "batchDecrypt"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/batch-encrypt",
+      "name": "batchEncrypt"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/decrypt",
+      "name": "decryptValue"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/destroy",
+      "name": "createDestroy"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/encrypt",
+      "name": "encryptValue"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/import",
+      "name": "importStack"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/preview",
+      "name": "createPreview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/update",
+      "name": "createUpdate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}",
+      "name": "startUpdate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/complete",
+      "name": "completeUpdate"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/events",
+      "name": "postEngineEvent"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/events/batch",
+      "name": "postEngineEventBatch"
+    },
+    {
+      "method": "POST",
+      "path": "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}/renew_lease",
+      "name": "renewLease"
+    }
+  ]
+}

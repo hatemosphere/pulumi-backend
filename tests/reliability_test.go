@@ -1267,6 +1267,9 @@ func TestDeclaredErrorCodesCoverage(t *testing.T) {
 		// user.go — declared for spec compat, no specific trigger
 		"listUserStacks": {400: true},
 		"getDefaultOrg":  {400: true},
+
+		// public routes
+		"readinessCheck": {503: true},
 	}
 
 	var missing []string

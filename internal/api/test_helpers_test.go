@@ -104,6 +104,11 @@ func newTestAPI(t *testing.T) *testAPI {
 // do issues an HTTP request through the router and returns the recorder.
 func (a *testAPI) do(method, path string, body any) *httptest.ResponseRecorder {
 	a.t.Helper()
+	return a.doWithAuth(method, path, body, "token test-token")
+}
+
+func (a *testAPI) doWithAuth(method, path string, body any, authHeader string) *httptest.ResponseRecorder {
+	a.t.Helper()
 	var reader *bytes.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -117,7 +122,9 @@ func (a *testAPI) do(method, path string, body any) *httptest.ResponseRecorder {
 	} else {
 		req = httptest.NewRequest(method, path, nil)
 	}
-	req.Header.Set("Authorization", "token test-token")
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
 	rec := httptest.NewRecorder()
 	a.router.ServeHTTP(rec, req)
 	return rec

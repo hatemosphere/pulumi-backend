@@ -75,12 +75,15 @@ func BenchmarkListVisibleStacksPage(b *testing.B) {
 }
 
 func BenchmarkScheduleOIDCFollowUp(b *testing.B) {
+	ctx, cancel := context.WithCancel(b.Context())
+	defer cancel()
+
 	srv := &Server{
 		oidcAuth:      benchOIDCAuthenticator{},
 		tokenStore:    newSQLiteBenchmarkTokenStore(b),
-		backgroundCtx: context.Background(),
+		backgroundCtx: ctx,
 		clock:         clockutil.RealClock{},
-		oidcFollowUp:  newOIDCFollowUpScheduler(context.Background(), clockutil.RealClock{}),
+		oidcFollowUp:  newOIDCFollowUpScheduler(ctx, clockutil.RealClock{}),
 	}
 
 	tok := &storage.Token{

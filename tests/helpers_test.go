@@ -20,6 +20,13 @@ import (
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
+func pulumiCLIPath() string {
+	if path := os.Getenv("PULUMI_CLI_PATH"); path != "" {
+		return path
+	}
+	return "pulumi"
+}
+
 // testBackend holds a running backend server for integration tests.
 type testBackend struct {
 	URL     string
@@ -141,9 +148,19 @@ func waitForBackend(t testing.TB, baseURL string) {
 // requireCLI skips the test if the pulumi CLI binary is not available.
 func requireCLI(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("pulumi"); err != nil {
-		t.Skip("pulumi CLI not in PATH, skipping CLI integration test")
+	if _, err := exec.LookPath(pulumiCLIPath()); err != nil {
+		t.Skipf("%s not in PATH, skipping CLI integration test", pulumiCLIPath())
 	}
+}
+
+func pulumiVersion(t testing.TB) string {
+	t.Helper()
+	cmd := exec.Command(pulumiCLIPath(), "version") //nolint:gosec // test helper may use configured CLI path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pulumi version failed: %v\nOutput:\n%s", err, string(out))
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // pulumi runs a pulumi CLI command against the test backend.
@@ -156,7 +173,7 @@ func (tb *testBackend) pulumi(t *testing.T, dir string, args ...string) string {
 func (tb *testBackend) pulumiEnv(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
 
-	cmd := exec.Command("pulumi", args...)
+	cmd := exec.Command(pulumiCLIPath(), args...) //nolint:gosec // test helper may use configured CLI path
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"PULUMI_ACCESS_TOKEN=test-token",
@@ -178,7 +195,7 @@ func (tb *testBackend) pulumiEnv(t *testing.T, dir string, env []string, args ..
 func (tb *testBackend) pulumiExpectFailure(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
-	cmd := exec.Command("pulumi", args...)
+	cmd := exec.Command(pulumiCLIPath(), args...) //nolint:gosec // test helper may use configured CLI path
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"PULUMI_ACCESS_TOKEN=test-token",
@@ -199,7 +216,7 @@ func (tb *testBackend) pulumiExpectFailure(t *testing.T, dir string, args ...str
 func (tb *testBackend) pulumiMayFail(t *testing.T, dir string, env []string, args ...string) (string, error) {
 	t.Helper()
 
-	cmd := exec.Command("pulumi", args...)
+	cmd := exec.Command(pulumiCLIPath(), args...) //nolint:gosec // test helper may use configured CLI path
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"PULUMI_ACCESS_TOKEN=test-token",

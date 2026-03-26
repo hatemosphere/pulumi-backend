@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -249,4 +250,62 @@ func TestPublicHealthAndCapabilitiesHandlers(t *testing.T) {
 		assert.NotEmpty(t, body.LatestVersion)
 		assert.NotEmpty(t, body.OldestWithoutWarning)
 	})
+}
+
+func TestRealIPIgnoresForwardedHeadersFromUntrustedProxy(t *testing.T) {
+	srv, _ := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/user", nil)
+	req.Header.Set("Authorization", "token test-token")
+	req.Header.Set("X-Forwarded-For", "1.2.3.4")
+	req.RemoteAddr = "198.51.100.10:1234"
+	rec := httptest.NewRecorder()
+
+	srv.Router().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"githubLogin":"test-user"`)
+}
+
+func TestRealIPHonorsForwardedHeadersFromTrustedProxy(t *testing.T) {
+	proxies, err := ParseTrustedProxies("198.51.100.0/24")
+	require.NoError(t, err)
+
+	srv, _ := newTestServer(t)
+	WithTrustedProxies(proxies)(srv)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/token-exchange", nil)
+	req.Header.Set("Authorization", "token test-token")
+	req.Header.Set("X-Forwarded-For", "1.2.3.4, 198.51.100.10")
+	req.RemoteAddr = "198.51.100.10:1234"
+	rec := httptest.NewRecorder()
+
+	handler := realIP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		//nolint:gosec // test-only echo of normalized remote address
+		_, _ = w.Write([]byte(r.RemoteAddr))
+	}), srv.trustedProxies)
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, "1.2.3.4", rec.Body.String())
+}
+
+func TestOpenAPISpecContainsCoreRoutes(t *testing.T) {
+	spec, err := BuildOpenAPISpec()
+	require.NoError(t, err)
+
+	paths := stringMapKeys(spec.Paths.Map())
+	assert.Contains(t, paths, "/api/stacks/{orgName}/{projectName}")
+	assert.Contains(t, paths, "/api/stacks/{orgName}/{projectName}/{stackName}")
+	assert.Contains(t, paths, "/api/stacks/{orgName}/{projectName}/{stackName}/rename")
+	assert.Contains(t, paths, "/api/stacks/{orgName}/{projectName}/{stackName}/{updateKind}/{updateID}")
+	assert.Contains(t, paths, "/api/user")
+	assert.Contains(t, paths, "/api/user/tokens")
+}
+
+func stringMapKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }

@@ -17,6 +17,9 @@ pulumi-spec.json
 # Debug logs
 *.log
 
+# Local caches / downloaded toolchains
+.cache/
+
 # IDE
 .idea/
 .vscode/

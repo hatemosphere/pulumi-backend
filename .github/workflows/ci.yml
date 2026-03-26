@@ -85,7 +85,7 @@ jobs:
 
       - uses: pulumi/setup-pulumi@b374ceb6168550de27c6eba92e01c1a774040e11 # v2.0.0
         with:
-          pulumi-version: 3.227.0
+          pulumi-version: 3.228.0
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@v1.13.0
@@ -94,7 +94,10 @@ jobs:
         run: curl -sfo pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json
 
       - name: HTTP API and spec compliance tests
-        run: gotestsum --junitfile api-results.xml -- -v -timeout 120s ./tests/ -count=1
+        run: >-
+          gotestsum --junitfile api-results.xml --
+          -v -timeout 120s ./tests/ -count=1
+          -run '^(TestOpenAPISpecSelfConsistency|TestAPISpecCoverage|TestAPISpecSchemaCompliance|TestDeclaredErrorCodesExercised|TestDeclaredErrorCodesCoverage|TestPulumiHTTPContractSnapshotUpToDate)$'
 
       - name: Test report
         uses: mikepenz/action-junit-report@49b2ca06f62aa7ef83ae6769a2179271e160d8e4 # v6.3.1
@@ -113,7 +116,7 @@ jobs:
           name: api-test-results
           path: api-results.xml
 
-  test-cli:
+  test-integration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -124,7 +127,7 @@ jobs:
 
       - uses: pulumi/setup-pulumi@b374ceb6168550de27c6eba92e01c1a774040e11 # v2.0.0
         with:
-          pulumi-version: 3.227.0
+          pulumi-version: 3.228.0
 
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@v1.13.0
@@ -132,7 +135,7 @@ jobs:
       - name: Download upstream spec
         run: curl -sfo pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json
 
-      - name: All tests (including CLI integration)
+      - name: Full integration tests
         run: gotestsum --junitfile cli-results.xml -- -v -timeout 600s ./tests/ -count=1
 
       - name: Test report
@@ -152,8 +155,68 @@ jobs:
           name: cli-test-results
           path: cli-results.xml
 
+  test-cli-compat:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pulumi-version: ["3.210.0", "3.220.0", "3.225.1", "3.228.0"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - uses: pulumi/setup-pulumi@b374ceb6168550de27c6eba92e01c1a774040e11 # v2.0.0
+        with:
+          pulumi-version: ${{ matrix.pulumi-version }}
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+
+      - name: CLI compatibility smoke tests
+        run: >-
+          gotestsum --junitfile cli-compat-${{ matrix.pulumi-version }}.xml --
+          -v -timeout 180s ./tests/ -count=1 -run '^TestCLICompat_'
+
+      - name: Test report
+        uses: mikepenz/action-junit-report@49b2ca06f62aa7ef83ae6769a2179271e160d8e4 # v6.3.1
+        if: always()
+        with:
+          report_paths: cli-compat-${{ matrix.pulumi-version }}.xml
+          check_name: CLI Compat (${{ matrix.pulumi-version }})
+          include_passed: true
+          detailed_summary: true
+          job_summary: true
+
+      - name: Upload test results
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: cli-compat-${{ matrix.pulumi-version }}
+          path: cli-compat-${{ matrix.pulumi-version }}.xml
+
+  verify-compat-metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: Refresh vendored Pulumi HTTP contract snapshot
+        run: go run ./cmd/dump-pulumi-http-contract
+
+      - name: Refresh CLI compatibility matrix and README badges
+        run: go run ./cmd/run-cli-compat-matrix
+
+      - name: Verify generated compatibility metadata is committed
+        run: git diff --exit-code -- README.md tests/testdata/cli_compat_matrix.json tests/testdata/pulumi_http_contract.json
+
   docker-publish:
-    needs: [build, lint, test-unit, test-api, test-cli]
+    needs: [build, lint, test-unit, test-api, test-integration, test-cli-compat, verify-compat-metadata]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
