@@ -4,6 +4,7 @@
     "currentStable": "3.228.0",
     "checkedDate": "2026-03-26"
   },
+  "fullSuiteVersion": "3.228.0",
   "testPattern": "^TestCLICompat_",
   "versions": [
     "3.210.0",

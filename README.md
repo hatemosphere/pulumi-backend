@@ -4,6 +4,8 @@
 ## CLI Compatibility
 Tested smoke suite `^TestCLICompat_` against Pulumi CLI releases. Current stable at check time: `3.228.0`.
 
+[![Pulumi CLI full-suite 3.228.0](https://img.shields.io/badge/Pulumi_CLI_full--suite_3.228.0-verified-blue)](https://github.com/pulumi/pulumi/releases/tag/v3.228.0)
+
 [![Pulumi CLI 3.210.0](https://img.shields.io/badge/Pulumi_CLI_3.210.0-compatible-brightgreen)](https://github.com/pulumi/pulumi/releases/tag/v3.210.0)
 [![Pulumi CLI 3.220.0](https://img.shields.io/badge/Pulumi_CLI_3.220.0-compatible-brightgreen)](https://github.com/pulumi/pulumi/releases/tag/v3.220.0)
 [![Pulumi CLI 3.225.1](https://img.shields.io/badge/Pulumi_CLI_3.225.1-compatible-brightgreen)](https://github.com/pulumi/pulumi/releases/tag/v3.225.1)
@@ -11,6 +13,7 @@ Tested smoke suite `^TestCLICompat_` against Pulumi CLI releases. Current stable
 
 | Version | Status |
 |---|---|
+| `full suite` | `3.228.0` |
 | `3.210.0` | `compatible` |
 | `3.220.0` | `compatible` |
 | `3.225.1` | `compatible` |

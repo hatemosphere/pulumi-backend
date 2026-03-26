@@ -22,9 +22,10 @@ type matrixFile struct {
 		CurrentStable string `json:"currentStable"`
 		CheckedDate   string `json:"checkedDate"`
 	} `json:"source"`
-	TestPattern string                  `json:"testPattern"`
-	Versions    []string                `json:"versions"`
-	Results     map[string]matrixResult `json:"results"`
+	FullSuiteVersion string                  `json:"fullSuiteVersion"`
+	TestPattern      string                  `json:"testPattern"`
+	Versions         []string                `json:"versions"`
+	Results          map[string]matrixResult `json:"results"`
 }
 
 type matrixResult struct {
@@ -205,6 +206,10 @@ func renderReadmeSection(m *matrixFile) string {
 	fmt.Fprintln(&b, "## CLI Compatibility")
 	fmt.Fprintf(&b, "Tested smoke suite `%s` against Pulumi CLI releases. Current stable at check time: `%s`.\n\n",
 		m.TestPattern, m.Source.CurrentStable)
+	if m.FullSuiteVersion != "" {
+		fmt.Fprintf(&b, "[![Pulumi CLI full-suite %s](https://img.shields.io/badge/Pulumi_CLI_full--suite_%s-verified-blue)](https://github.com/pulumi/pulumi/releases/tag/v%s)\n\n",
+			m.FullSuiteVersion, strings.ReplaceAll(m.FullSuiteVersion, "-", "--"), m.FullSuiteVersion)
+	}
 
 	versions := slices.Clone(m.Versions)
 	slices.Sort(versions)
@@ -230,6 +235,9 @@ func renderReadmeSection(m *matrixFile) string {
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "| Version | Status |")
 	fmt.Fprintln(&b, "|---|---|")
+	if m.FullSuiteVersion != "" {
+		fmt.Fprintf(&b, "| `full suite` | `%s` |\n", m.FullSuiteVersion)
+	}
 	for _, version := range versions {
 		fmt.Fprintf(&b, "| `%s` | `%s` |\n", version, m.Results[version].Status)
 	}
