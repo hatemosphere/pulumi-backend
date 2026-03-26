@@ -129,7 +129,7 @@ func TestStackLifecycle(t *testing.T) {
 	}
 
 	// 4. List stacks
-	stacks, _, err := store.ListStacks(ctx, "org1", "", "")
+	stacks, _, err := store.ListStacks(ctx, "org1", "", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestListStacksOnlyReturnsContinuationTokenWhenMoreRowsExist(t *testing.T) {
 		}
 	}
 
-	stacks, nextToken, err := store.ListStacks(ctx, "org1", "", "")
+	stacks, nextToken, err := store.ListStacks(ctx, "org1", "", "", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

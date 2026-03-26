@@ -109,6 +109,7 @@ func main() {
 	}
 
 	srv := api.NewServer(mgr, cfg.DefaultOrg, cfg.DefaultUser, serverOpts...)
+	defer srv.Close()
 
 	handler := srv.Router()
 	if tp != nil {

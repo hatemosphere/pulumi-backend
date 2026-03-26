@@ -12,16 +12,21 @@ type Scheduler struct {
 	backupFn func(ctx context.Context) error
 	interval time.Duration
 	mu       sync.Mutex // prevent concurrent backup runs (scheduled + on-demand)
+	ctx      context.Context
 	stop     chan struct{}
 	done     chan struct{}
 }
 
 // NewScheduler creates and starts a periodic backup scheduler.
 // The backupFn is called on each tick. If interval is 0, no goroutine is started.
-func NewScheduler(backupFn func(ctx context.Context) error, interval time.Duration) *Scheduler {
+func NewScheduler(ctx context.Context, backupFn func(ctx context.Context) error, interval time.Duration) *Scheduler {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s := &Scheduler{
 		backupFn: backupFn,
 		interval: interval,
+		ctx:      ctx,
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
@@ -43,7 +48,7 @@ func (s *Scheduler) run() {
 	for {
 		select {
 		case <-ticker.C:
-			if err := s.RunOnce(context.Background()); err != nil {
+			if err := s.RunOnce(s.ctx); err != nil {
 				slog.Error("scheduled backup failed", "error", err)
 			}
 		case <-s.stop:

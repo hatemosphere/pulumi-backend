@@ -60,7 +60,13 @@ func (m *MockStore) RenewLease(ctx context.Context, id string, token string, exp
 }
 
 // newSQLiteTestServer creates a Server backed by a real SQLite database in a temp dir.
-func newSQLiteTestServer(t *testing.T) *Server {
+func newSQLiteTestServer(t testing.TB) *Server {
+	t.Helper()
+
+	return newSQLiteTestServerWithOptions(t)
+}
+
+func newSQLiteTestServerWithOptions(t testing.TB, opts ...ServerOption) *Server {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -75,7 +81,12 @@ func newSQLiteTestServer(t *testing.T) *Server {
 	require.NoError(t, err)
 	t.Cleanup(mgr.Shutdown)
 
-	return NewServer(mgr, "organization", "test-user", WithSingleTenantToken("test-token"))
+	baseOpts := make([]ServerOption, 0, 1+len(opts))
+	baseOpts = append(baseOpts, WithSingleTenantToken("test-token"))
+	baseOpts = append(baseOpts, opts...)
+	srv := NewServer(mgr, "organization", "test-user", baseOpts...)
+	t.Cleanup(func() { _ = srv.Close() })
+	return srv
 }
 
 // testAPI wraps a Server router for compact HTTP handler tests.

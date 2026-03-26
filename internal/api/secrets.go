@@ -18,7 +18,7 @@ func (s *Server) registerSecrets(api huma.API) {
 	}, func(ctx context.Context, input *EncryptValueInput) (*EncryptValueOutput, error) {
 		ciphertext, err := s.engine.EncryptValue(ctx, input.OrgName, input.ProjectName, input.StackName, input.Body.Plaintext)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, stackNotFoundOrInternalError(err)
 		}
 		out := &EncryptValueOutput{}
 		out.Body.Ciphertext = ciphertext
@@ -34,7 +34,7 @@ func (s *Server) registerSecrets(api huma.API) {
 	}, func(ctx context.Context, input *DecryptValueInput) (*DecryptValueOutput, error) {
 		plaintext, err := s.engine.DecryptValue(ctx, input.OrgName, input.ProjectName, input.StackName, input.Body.Ciphertext)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, stackNotFoundOrInternalError(err)
 		}
 		out := &DecryptValueOutput{}
 		out.Body.Plaintext = plaintext
@@ -52,7 +52,7 @@ func (s *Server) registerSecrets(api huma.API) {
 		for i, pt := range input.Body.Plaintexts {
 			ct, err := s.engine.EncryptValue(ctx, input.OrgName, input.ProjectName, input.StackName, pt)
 			if err != nil {
-				return nil, internalError(err)
+				return nil, stackNotFoundOrInternalError(err)
 			}
 			ciphertexts[i] = ct
 		}
@@ -72,7 +72,7 @@ func (s *Server) registerSecrets(api huma.API) {
 		for _, ct := range input.Body.Ciphertexts {
 			pt, err := s.engine.DecryptValue(ctx, input.OrgName, input.ProjectName, input.StackName, ct)
 			if err != nil {
-				return nil, internalError(err)
+				return nil, stackNotFoundOrInternalError(err)
 			}
 			key := base64.StdEncoding.EncodeToString(ct)
 			plaintexts[key] = pt

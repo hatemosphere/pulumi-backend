@@ -46,6 +46,10 @@ func internalError(err error) error {
 	return huma.NewError(http.StatusInternalServerError, sanitizeError(err))
 }
 
+func badRequestError(err error) error {
+	return huma.NewError(http.StatusBadRequest, sanitizeError(err))
+}
+
 // conflictError returns a 409 error with a sanitized message.
 func conflictError(err error) error {
 	return huma.NewError(http.StatusConflict, sanitizeError(err))
@@ -56,6 +60,28 @@ func conflictError(err error) error {
 func conflictOrInternalError(err error) error {
 	if isConflictError(err) {
 		return conflictError(err)
+	}
+	return internalError(err)
+}
+
+func stackNotFoundError() error {
+	return huma.NewError(http.StatusNotFound, "stack not found")
+}
+
+func updateNotFoundError() error {
+	return huma.NewError(http.StatusNotFound, "update not found")
+}
+
+func stackNotFoundOrInternalError(err error) error {
+	if isNotFoundError(err) {
+		return stackNotFoundError()
+	}
+	return internalError(err)
+}
+
+func updateNotFoundOrInternalError(err error) error {
+	if isNotFoundError(err) {
+		return updateNotFoundError()
 	}
 	return internalError(err)
 }

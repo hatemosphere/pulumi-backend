@@ -62,7 +62,7 @@ func (s *Server) exportStack(ctx context.Context, org, project, stack string, ve
 		// Fall through to uncompressed path.
 		deployment, err := s.engine.ExportState(ctx, org, project, stack, version)
 		if err != nil {
-			return nil, huma.NewError(http.StatusNotFound, err.Error())
+			return nil, stackNotFoundOrInternalError(err)
 		}
 		return &huma.StreamResponse{
 			Body: func(ctx huma.Context) {
@@ -147,10 +147,10 @@ func (s *Server) registerStacks(api huma.API) {
 	}, func(ctx context.Context, input *GetStackInput) (*GetStackOutput, error) {
 		st, err := s.engine.GetStack(ctx, input.OrgName, input.ProjectName, input.StackName)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, stackNotFoundOrInternalError(err)
 		}
 		if st == nil {
-			return nil, huma.NewError(http.StatusNotFound, "stack not found")
+			return nil, stackNotFoundError()
 		}
 
 		activeUpdate, _ := s.engine.GetActiveUpdate(ctx, input.OrgName, input.ProjectName, input.StackName)
@@ -168,7 +168,7 @@ func (s *Server) registerStacks(api huma.API) {
 	}, func(ctx context.Context, input *DeleteStackInput) (*struct{}, error) {
 		err := s.engine.DeleteStack(ctx, input.OrgName, input.ProjectName, input.StackName, input.Force)
 		if err != nil {
-			return nil, huma.NewError(http.StatusBadRequest, err.Error())
+			return nil, badRequestError(err)
 		}
 		stackOperationsTotal.WithLabelValues("delete").Inc()
 		return nil, nil
@@ -299,10 +299,10 @@ func (s *Server) registerStacks(api huma.API) {
 	}, func(ctx context.Context, input *GetStackConfigInput) (*GetStackConfigOutput, error) {
 		st, err := s.engine.GetStack(ctx, input.OrgName, input.ProjectName, input.StackName)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, stackNotFoundOrInternalError(err)
 		}
 		if st == nil {
-			return nil, huma.NewError(http.StatusNotFound, "stack not found")
+			return nil, stackNotFoundError()
 		}
 		return &GetStackConfigOutput{}, nil
 	})

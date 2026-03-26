@@ -14,6 +14,7 @@ import (
 	"github.com/segmentio/encoding/json"
 
 	"github.com/XSAM/otelsql"
+	sqlite3 "github.com/ncruces/go-sqlite3"
 	sqlitedriver "github.com/ncruces/go-sqlite3/driver"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
@@ -45,6 +46,10 @@ func nullUnixToTimePtr(v sql.NullInt64) *time.Time {
 }
 
 const defaultMaxStateVersions = 50
+
+func isUniqueConstraintError(err error) bool {
+	return errors.Is(err, sqlite3.CONSTRAINT_UNIQUE) || errors.Is(err, sqlite3.CONSTRAINT_PRIMARYKEY)
+}
 
 // SQLiteStoreConfig holds tuning parameters for SQLiteStore.
 type SQLiteStoreConfig struct {
@@ -241,13 +246,6 @@ CREATE TABLE IF NOT EXISTS organizations (
     created_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS projects (
-    org_name TEXT NOT NULL,
-    name TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (org_name, name)
-);
-
 CREATE TABLE IF NOT EXISTS stacks (
     org_name TEXT NOT NULL,
     project_name TEXT NOT NULL,
@@ -369,14 +367,6 @@ func (s *SQLiteStore) CreateStack(ctx context.Context, st *Stack) error {
 		return err
 	}
 
-	// Ensure project exists.
-	_, err = tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO projects (org_name, name, created_at) VALUES (?, ?, ?)`,
-		st.OrgName, st.ProjectName, now)
-	if err != nil {
-		return err
-	}
-
 	tagsJSON, err := json.Marshal(st.Tags)
 	if err != nil {
 		return fmt.Errorf("marshal tags: %w", err)
@@ -386,7 +376,7 @@ func (s *SQLiteStore) CreateStack(ctx context.Context, st *Stack) error {
 		 VALUES (?, ?, ?, ?, 0, ?, ?)`,
 		st.OrgName, st.ProjectName, st.StackName, string(tagsJSON), now, now)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		if isUniqueConstraintError(err) {
 			return fmt.Errorf("%w: %s/%s/%s", ErrStackAlreadyExists, st.OrgName, st.ProjectName, st.StackName)
 		}
 		return fmt.Errorf("create stack: %w", err)
@@ -492,8 +482,12 @@ func buildListStacksQuery(org, project, continuationToken string, pageSize int) 
 }
 
 // ListStacks returns a paginated list of stacks with optional org/project filters.
-func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, continuationToken string) ([]Stack, string, error) {
-	query, args := buildListStacksQuery(org, project, continuationToken, s.stackListPageSize+1)
+func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, continuationToken string, pageSize int) ([]Stack, string, error) {
+	if pageSize <= 0 {
+		pageSize = s.stackListPageSize
+	}
+
+	query, args := buildListStacksQuery(org, project, continuationToken, pageSize+1)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -524,10 +518,10 @@ func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, conti
 	}
 
 	var nextToken string
-	if len(stacks) > s.stackListPageSize {
-		last := stacks[s.stackListPageSize-1]
+	if len(stacks) > pageSize {
+		last := stacks[pageSize-1]
 		nextToken = last.OrgName + "/" + last.ProjectName + "/" + last.StackName
-		stacks = stacks[:s.stackListPageSize]
+		stacks = stacks[:pageSize]
 	}
 	return stacks, nextToken, nil
 }
@@ -568,7 +562,7 @@ func (s *SQLiteStore) RenameStack(ctx context.Context, org, oldProject, oldName,
 		`UPDATE stacks SET project_name=?, name=?, updated_at=? WHERE org_name=? AND project_name=? AND name=?`,
 		newProject, newName, now, org, oldProject, oldName)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		if isUniqueConstraintError(err) {
 			return fmt.Errorf("%w: %s/%s/%s", ErrStackAlreadyExists, org, newProject, newName)
 		}
 		return fmt.Errorf("rename stack: %w", err)

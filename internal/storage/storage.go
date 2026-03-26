@@ -113,7 +113,7 @@ type Store interface {
 	CreateStack(ctx context.Context, s *Stack) error
 	GetStack(ctx context.Context, org, project, stack string) (*Stack, error)
 	DeleteStack(ctx context.Context, org, project, stack string) error
-	ListStacks(ctx context.Context, org, project string, continuationToken string) ([]Stack, string, error)
+	ListStacks(ctx context.Context, org, project string, continuationToken string, pageSize int) ([]Stack, string, error)
 	UpdateStackTags(ctx context.Context, org, project, stack string, tags map[string]string) error
 	RenameStack(ctx context.Context, org, oldProject, oldName, newProject, newName string) error
 	ProjectExists(ctx context.Context, org, project string) (bool, error)

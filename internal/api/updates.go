@@ -34,6 +34,11 @@ func isConflictError(err error) bool {
 		errors.Is(err, engine.ErrNoActiveUpdate)
 }
 
+func isNotFoundError(err error) bool {
+	return errors.Is(err, engine.ErrStackNotFound) ||
+		errors.Is(err, engine.ErrUpdateNotFound)
+}
+
 // sanitizeError returns a client-safe error message.
 // Sentinel errors pass through. Internal errors are scrubbed of UUIDs, SQL details,
 // file paths, and OS-level messages.
@@ -155,10 +160,10 @@ func (s *Server) registerUpdates(api huma.API) {
 	}, func(ctx context.Context, input *GetUpdateStatusInput) (*GetUpdateStatusOutput, error) {
 		u, err := s.engine.GetUpdate(ctx, input.UpdateID)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, updateNotFoundOrInternalError(err)
 		}
 		if u == nil {
-			return nil, huma.NewError(http.StatusNotFound, "update not found")
+			return nil, updateNotFoundError()
 		}
 
 		out := &GetUpdateStatusOutput{}
@@ -354,10 +359,10 @@ func (s *Server) registerUpdates(api huma.API) {
 	}, func(ctx context.Context, input *GetEventsInput) (*GetEventsOutput, error) {
 		u, err := s.engine.GetUpdate(ctx, input.UpdateID)
 		if err != nil {
-			return nil, internalError(err)
+			return nil, updateNotFoundOrInternalError(err)
 		}
 		if u == nil {
-			return nil, huma.NewError(http.StatusNotFound, "update not found")
+			return nil, updateNotFoundError()
 		}
 
 		var offset int

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/hatemosphere/pulumi-backend/internal/auth"
 )
 
 func TestStackHandlers_ProjectExists404(t *testing.T) {
@@ -223,6 +226,34 @@ func TestStackHandlers_RenameConflict(t *testing.T) {
 	rec := api.do(http.MethodPost, "/api/stacks/organization/test-project/source/rename", map[string]string{"newName": "target"})
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.Contains(t, rec.Body.String(), "a stack with that name already exists")
+}
+
+func TestListVisibleStacksPageFillsVisibleResultsUnderRBAC(t *testing.T) {
+	resolver, err := auth.NewRBACResolver(&auth.RBACConfig{
+		DefaultPermission: "none",
+		StackPolicies: []auth.StackPolicy{
+			{Group: "devs", StackPattern: "organization/proj-a/*", Permission: "read"},
+			{Group: "devs", StackPattern: "organization/proj-c/*", Permission: "read"},
+		},
+	})
+	require.NoError(t, err)
+
+	srv := newSQLiteTestServerWithOptions(t, WithRBAC(resolver))
+	ctx := auth.WithIdentity(context.Background(), &auth.UserIdentity{
+		UserName: "dev@example.com",
+		Groups:   []string{"devs"},
+	})
+
+	require.NoError(t, srv.engine.CreateStack(ctx, "organization", "proj-a", "stack-1", nil))
+	require.NoError(t, srv.engine.CreateStack(ctx, "organization", "proj-b", "stack-2", nil))
+	require.NoError(t, srv.engine.CreateStack(ctx, "organization", "proj-c", "stack-3", nil))
+
+	stacks, nextToken, err := srv.listVisibleStacksPage(ctx, "organization", "", "", 2)
+	require.NoError(t, err)
+	require.Len(t, stacks, 2)
+	assert.Equal(t, "proj-a", stacks[0].ProjectName)
+	assert.Equal(t, "proj-c", stacks[1].ProjectName)
+	assert.Equal(t, "", nextToken)
 }
 
 func TestStackHandlers_Tags(t *testing.T) {

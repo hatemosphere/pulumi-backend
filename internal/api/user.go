@@ -10,6 +10,8 @@ import (
 	"github.com/hatemosphere/pulumi-backend/internal/storage"
 )
 
+const defaultVisibleStackPageSize = 100
+
 func (s *Server) registerUser(api huma.API) {
 	huma.Register(api, huma.Operation{
 		OperationID: "getUser",
@@ -49,12 +51,15 @@ func (s *Server) registerUser(api huma.API) {
 		Tags:        []string{"User"},
 		Errors:      []int{400},
 	}, func(ctx context.Context, input *ListUserStacksInput) (*ListUserStacksOutput, error) {
-		stacks, nextToken, err := s.engine.ListStacks(ctx, input.Organization, input.Project, input.ContinuationToken)
+		pageSize := input.MaxResults
+		if pageSize <= 0 {
+			pageSize = defaultVisibleStackPageSize
+		}
+
+		stacks, nextToken, err := s.listVisibleStacksPage(ctx, input.Organization, input.Project, input.ContinuationToken, pageSize)
 		if err != nil {
 			return nil, internalError(err)
 		}
-
-		stacks = s.filterStacksByRBAC(ctx, stacks)
 
 		out := &ListUserStacksOutput{}
 		out.Body.Stacks = stacksToSummaries(stacks, true)
@@ -83,12 +88,10 @@ func (s *Server) registerUser(api huma.API) {
 		Path:        "/api/stacks/{orgName}",
 		Tags:        []string{"Stacks"},
 	}, func(ctx context.Context, input *ListOrgStacksInput) (*ListOrgStacksOutput, error) {
-		stacks, nextToken, err := s.engine.ListStacks(ctx, input.OrgName, "", input.ContinuationToken)
+		stacks, nextToken, err := s.listVisibleStacksPage(ctx, input.OrgName, "", input.ContinuationToken, defaultVisibleStackPageSize)
 		if err != nil {
 			return nil, internalError(err)
 		}
-
-		stacks = s.filterStacksByRBAC(ctx, stacks)
 
 		out := &ListOrgStacksOutput{}
 		out.Body.Stacks = stacksToSummaries(stacks, false)
@@ -97,6 +100,38 @@ func (s *Server) registerUser(api huma.API) {
 		}
 		return out, nil
 	})
+}
+
+func (s *Server) listVisibleStacksPage(ctx context.Context, org, project, continuationToken string, pageSize int) ([]storage.Stack, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultVisibleStackPageSize
+	}
+	if s.rbac == nil {
+		return s.engine.ListStacks(ctx, org, project, continuationToken, pageSize)
+	}
+
+	visible := make([]storage.Stack, 0, pageSize)
+	token := continuationToken
+	for len(visible) < pageSize {
+		stacks, nextToken, err := s.engine.ListStacks(ctx, org, project, token, pageSize)
+		if err != nil {
+			return nil, "", err
+		}
+
+		filtered := s.filterStacksByRBAC(ctx, stacks)
+		remaining := pageSize - len(visible)
+		if len(filtered) > remaining {
+			visible = append(visible, filtered[:remaining]...)
+			return visible, nextToken, nil
+		}
+		visible = append(visible, filtered...)
+		if nextToken == "" {
+			return visible, "", nil
+		}
+		token = nextToken
+	}
+
+	return visible, token, nil
 }
 
 // filterStacksByRBAC removes stacks the user does not have at least read

@@ -14,7 +14,7 @@ func TestScheduler_RunOnce(t *testing.T) {
 		return nil
 	}
 
-	sched := NewScheduler(fn, 0) // no periodic scheduling
+	sched := NewScheduler(context.Background(), fn, 0) // no periodic scheduling
 	defer sched.Shutdown()
 
 	if err := sched.RunOnce(context.Background()); err != nil {
@@ -32,7 +32,7 @@ func TestScheduler_PeriodicTick(t *testing.T) {
 		return nil
 	}
 
-	sched := NewScheduler(fn, 50*time.Millisecond)
+	sched := NewScheduler(context.Background(), fn, 50*time.Millisecond)
 
 	// Wait for at least 2 ticks.
 	time.Sleep(150 * time.Millisecond)
@@ -51,7 +51,7 @@ func TestScheduler_ShutdownStopsTicker(t *testing.T) {
 		return nil
 	}
 
-	sched := NewScheduler(fn, 50*time.Millisecond)
+	sched := NewScheduler(context.Background(), fn, 50*time.Millisecond)
 	time.Sleep(80 * time.Millisecond) // wait for 1 tick
 	sched.Shutdown()
 
@@ -64,6 +64,6 @@ func TestScheduler_ShutdownStopsTicker(t *testing.T) {
 }
 
 func TestScheduler_NoPanicOnZeroInterval(t *testing.T) {
-	sched := NewScheduler(func(_ context.Context) error { return nil }, 0)
+	sched := NewScheduler(context.Background(), func(_ context.Context) error { return nil }, 0)
 	sched.Shutdown() // should not panic or block
 }
