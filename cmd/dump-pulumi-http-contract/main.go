@@ -9,6 +9,11 @@ import (
 )
 
 func main() {
+	if !compatref.ReferenceSourceAvailable() {
+		fmt.Fprintln(os.Stderr, "reference/pulumi source tree not present; skipping contract snapshot refresh")
+		return
+	}
+
 	snapshot, err := compatref.LoadCurrentPulumiHTTPContract()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load contract: %v\n", err)

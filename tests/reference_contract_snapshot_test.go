@@ -10,6 +10,10 @@ import (
 )
 
 func TestPulumiHTTPContractSnapshotUpToDate(t *testing.T) {
+	if !compatref.ReferenceSourceAvailable() {
+		t.Skip("reference/pulumi source tree not present; skipping vendored contract freshness check")
+	}
+
 	current, err := compatref.LoadCurrentPulumiHTTPContract()
 	require.NoError(t, err)
 

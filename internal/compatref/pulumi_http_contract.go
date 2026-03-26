@@ -28,6 +28,15 @@ type PulumiHTTPContractSnapshot struct {
 
 var addEndpointPattern = regexp.MustCompile(`addEndpoint\("([^"]+)", "([^"]+)", "([^"]+)"\)`)
 
+func ReferenceSourceAvailable() bool {
+	root, err := repoRoot()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(root, "reference", "pulumi", "pkg", "backend", "httpstate", "client", "api_endpoints.go"))
+	return err == nil
+}
+
 func LoadCurrentPulumiHTTPContract() (*PulumiHTTPContractSnapshot, error) {
 	root, err := repoRoot()
 	if err != nil {

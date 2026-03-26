@@ -86,6 +86,18 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@v1.13.0
 
+      - name: Fetch Pulumi reference source
+        run: |
+          python - <<'PY'
+          import json, pathlib, subprocess
+          snap = json.loads(pathlib.Path("tests/testdata/pulumi_http_contract.json").read_text())
+          commit = snap.get("pulumiGitCommit")
+          if not commit:
+              raise SystemExit("pulumiGitCommit missing from tests/testdata/pulumi_http_contract.json")
+          subprocess.run(["git", "clone", "--no-checkout", "https://github.com/pulumi/pulumi.git", "reference/pulumi"], check=True)
+          subprocess.run(["git", "-C", "reference/pulumi", "checkout", commit], check=True)
+          PY
+
       - name: Download upstream spec
         run: curl -sfo pulumi-spec.json https://api.pulumi.com/api/openapi/pulumi-spec.json
 
@@ -201,6 +213,18 @@ jobs:
       - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
           go-version-file: go.mod
+
+      - name: Fetch Pulumi reference source
+        run: |
+          python - <<'PY'
+          import json, pathlib, subprocess
+          snap = json.loads(pathlib.Path("tests/testdata/pulumi_http_contract.json").read_text())
+          commit = snap.get("pulumiGitCommit")
+          if not commit:
+              raise SystemExit("pulumiGitCommit missing from tests/testdata/pulumi_http_contract.json")
+          subprocess.run(["git", "clone", "--no-checkout", "https://github.com/pulumi/pulumi.git", "reference/pulumi"], check=True)
+          subprocess.run(["git", "-C", "reference/pulumi", "checkout", commit], check=True)
+          PY
 
       - name: Refresh vendored Pulumi HTTP contract snapshot
         run: go run ./cmd/dump-pulumi-http-contract
