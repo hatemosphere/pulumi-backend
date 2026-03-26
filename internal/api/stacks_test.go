@@ -215,6 +215,16 @@ func TestStackHandlers_Rename(t *testing.T) {
 	assert.Equal(t, "new-name", body.StackName)
 }
 
+func TestStackHandlers_RenameConflict(t *testing.T) {
+	api := newTestAPI(t)
+	api.do(http.MethodPost, "/api/stacks/organization/test-project", map[string]string{"stackName": "source"})
+	api.do(http.MethodPost, "/api/stacks/organization/test-project", map[string]string{"stackName": "target"})
+
+	rec := api.do(http.MethodPost, "/api/stacks/organization/test-project/source/rename", map[string]string{"newName": "target"})
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Contains(t, rec.Body.String(), "a stack with that name already exists")
+}
+
 func TestStackHandlers_Tags(t *testing.T) {
 	api := newTestAPI(t)
 	api.do(http.MethodPost, "/api/stacks/organization/test-project", map[string]string{"stackName": "dev"})

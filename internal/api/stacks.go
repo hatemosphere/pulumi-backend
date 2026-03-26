@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -126,6 +127,9 @@ func (s *Server) registerStacks(api huma.API) {
 
 		err := s.engine.CreateStack(ctx, input.OrgName, input.ProjectName, input.Body.StackName, nil)
 		if err != nil {
+			if errors.Is(err, storage.ErrStackAlreadyExists) {
+				return nil, huma.NewError(http.StatusConflict, "a stack with that name already exists")
+			}
 			return nil, conflictError(err)
 		}
 
@@ -211,7 +215,7 @@ func (s *Server) registerStacks(api huma.API) {
 
 		err = s.engine.RenameStack(ctx, input.OrgName, input.ProjectName, input.StackName, newProject, input.Body.NewName)
 		if err != nil {
-			if strings.Contains(err.Error(), "already exists") {
+			if errors.Is(err, storage.ErrStackAlreadyExists) {
 				return nil, huma.NewError(http.StatusConflict, "a stack with that name already exists")
 			}
 			return nil, internalError(err)

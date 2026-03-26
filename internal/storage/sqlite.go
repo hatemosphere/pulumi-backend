@@ -387,7 +387,7 @@ func (s *SQLiteStore) CreateStack(ctx context.Context, st *Stack) error {
 		st.OrgName, st.ProjectName, st.StackName, string(tagsJSON), now, now)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			return fmt.Errorf("stack %s/%s/%s already exists", st.OrgName, st.ProjectName, st.StackName)
+			return fmt.Errorf("%w: %s/%s/%s", ErrStackAlreadyExists, st.OrgName, st.ProjectName, st.StackName)
 		}
 		return fmt.Errorf("create stack: %w", err)
 	}
@@ -493,7 +493,7 @@ func buildListStacksQuery(org, project, continuationToken string, pageSize int) 
 
 // ListStacks returns a paginated list of stacks with optional org/project filters.
 func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, continuationToken string) ([]Stack, string, error) {
-	query, args := buildListStacksQuery(org, project, continuationToken, s.stackListPageSize)
+	query, args := buildListStacksQuery(org, project, continuationToken, s.stackListPageSize+1)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -519,11 +519,15 @@ func (s *SQLiteStore) ListStacks(ctx context.Context, org, project string, conti
 		}
 		stacks = append(stacks, st)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
 
 	var nextToken string
-	if len(stacks) == s.stackListPageSize {
-		last := stacks[len(stacks)-1]
+	if len(stacks) > s.stackListPageSize {
+		last := stacks[s.stackListPageSize-1]
 		nextToken = last.OrgName + "/" + last.ProjectName + "/" + last.StackName
+		stacks = stacks[:s.stackListPageSize]
 	}
 	return stacks, nextToken, nil
 }
@@ -565,7 +569,7 @@ func (s *SQLiteStore) RenameStack(ctx context.Context, org, oldProject, oldName,
 		newProject, newName, now, org, oldProject, oldName)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			return fmt.Errorf("stack %s/%s/%s already exists", org, newProject, newName)
+			return fmt.Errorf("%w: %s/%s/%s", ErrStackAlreadyExists, org, newProject, newName)
 		}
 		return fmt.Errorf("rename stack: %w", err)
 	}

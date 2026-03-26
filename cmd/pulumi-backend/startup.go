@@ -416,9 +416,6 @@ func buildServerOptions(ctx context.Context, cfg *config.Config, store storage.S
 		serverOpts = append(serverOpts, api.WithPublicURL(cfg.PublicURL))
 		slog.Info("public URL configured", "url", cfg.PublicURL)
 	}
-	if cfg.PprofEnabled && cfg.ManagementAddr == "" {
-		serverOpts = append(serverOpts, api.WithPprof())
-	}
 	if cfg.TrustedProxies != "" {
 		proxies, err := api.ParseTrustedProxies(cfg.TrustedProxies)
 		if err != nil {

@@ -172,6 +172,40 @@ func TestStackLifecycle(t *testing.T) {
 	}
 }
 
+func TestListStacksOnlyReturnsContinuationTokenWhenMoreRowsExist(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := NewSQLiteStore(dbPath, SQLiteStoreConfig{StackListPageSize: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	for _, stackName := range []string{"stack1", "stack2"} {
+		err = store.CreateStack(ctx, &Stack{
+			OrgName:     "org1",
+			ProjectName: "proj1",
+			StackName:   stackName,
+			Tags:        map[string]string{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stacks, nextToken, err := store.ListStacks(ctx, "org1", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stacks) != 2 {
+		t.Fatalf("expected 2 stacks, got %d", len(stacks))
+	}
+	if nextToken != "" {
+		t.Fatalf("expected empty continuation token, got %q", nextToken)
+	}
+}
+
 func TestUpdateLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
 	store, err := NewSQLiteStore(filepath.Join(tmpDir, "test.db"), SQLiteStoreConfig{})

@@ -2,8 +2,11 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+var ErrStackAlreadyExists = errors.New("stack already exists")
 
 // Stack represents a stack record.
 type Stack struct {

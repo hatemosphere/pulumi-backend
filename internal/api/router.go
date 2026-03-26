@@ -10,9 +10,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/http/pprof"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -53,22 +53,26 @@ type Server struct {
 	groupsCache           *auth.GroupsCache      // optional: resolves groups via external API (e.g. Google Admin SDK)
 	jwtAuth               *auth.JWTAuthenticator // required in jwt auth mode
 	rbac                  *auth.RBACResolver     // nil = no RBAC enforcement
-	pprofEnabled          bool                   // enable /debug/pprof/ endpoints
 	publicURL             string                 // public base URL for redirect URIs (mitigates Host header poisoning)
 	skipManagementRoutes  bool                   // skip /healthz, /readyz, /metrics on main mux (served on management port)
 	cliSessionNonces      *nonceStore            // server-side CLI session nonce store
 	trustedProxies        []*net.IPNet           // CIDRs allowed to set forwarded headers (nil = trust none)
+	oidcFollowUpMu        sync.Mutex
+	oidcFollowUpLastRun   map[string]time.Time
+	oidcFollowUpSlots     chan struct{}
 }
 
 // NewServer creates a new API server.
 func NewServer(engine *engine.Manager, defaultOrg, defaultUser string, opts ...ServerOption) *Server {
 	s := &Server{
-		engine:           engine,
-		defaultOrg:       defaultOrg,
-		defaultUser:      defaultUser,
-		deltaCutoffBytes: 1024 * 1024, // 1MB default
-		historyPageSize:  10,
-		cliSessionNonces: newNonceStore(5 * time.Minute),
+		engine:              engine,
+		defaultOrg:          defaultOrg,
+		defaultUser:         defaultUser,
+		deltaCutoffBytes:    1024 * 1024, // 1MB default
+		historyPageSize:     10,
+		cliSessionNonces:    newNonceStore(5 * time.Minute),
+		oidcFollowUpLastRun: make(map[string]time.Time),
+		oidcFollowUpSlots:   make(chan struct{}, 8),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -122,11 +126,6 @@ func WithGroupsCache(gc *auth.GroupsCache) ServerOption {
 // WithRBAC sets the RBAC resolver for permission enforcement.
 func WithRBAC(resolver *auth.RBACResolver) ServerOption {
 	return func(s *Server) { s.rbac = resolver }
-}
-
-// WithPprof enables /debug/pprof/ profiling endpoints.
-func WithPprof() ServerOption {
-	return func(s *Server) { s.pprofEnabled = true }
 }
 
 // WithPublicURL sets the public base URL for redirect URI construction.
@@ -255,16 +254,6 @@ func (s *Server) Router() http.Handler {
 		s.registerUserTokens(api)
 	}
 	s.registerOrg(api)
-
-	// Register pprof debug endpoints (no auth, direct on mux).
-	if s.pprofEnabled {
-		mux.HandleFunc("GET /debug/pprof/", pprof.Index)
-		mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
-		mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
-		mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
-		mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
-		slog.Info("pprof enabled")
-	}
 
 	// HTTP-level middleware (outermost applied last).
 	var handler http.Handler = mux
@@ -506,8 +495,30 @@ func (s *Server) authOIDCHuma(api huma.API, ctx huma.Context, next func(huma.Con
 	slog.Debug("OIDC authentication successful", "user", identity.UserName)
 	next(huma.WithContext(ctx, auth.WithIdentity(ctx.Context(), identity)))
 
-	// Async: touch last_used_at + re-validate against OIDC provider if refresh token is stored.
+	s.scheduleOIDCFollowUp(tokenHash, tok)
+}
+
+const oidcFollowUpInterval = time.Minute
+
+func (s *Server) scheduleOIDCFollowUp(tokenHash string, tok *storage.Token) {
+	s.oidcFollowUpMu.Lock()
+	lastRun, ok := s.oidcFollowUpLastRun[tokenHash]
+	if ok && time.Since(lastRun) < oidcFollowUpInterval {
+		s.oidcFollowUpMu.Unlock()
+		return
+	}
+	select {
+	case s.oidcFollowUpSlots <- struct{}{}:
+		s.oidcFollowUpLastRun[tokenHash] = time.Now()
+		s.oidcFollowUpMu.Unlock()
+	default:
+		s.oidcFollowUpMu.Unlock()
+		return
+	}
+
 	go func() {
+		defer func() { <-s.oidcFollowUpSlots }()
+
 		asyncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
@@ -515,8 +526,6 @@ func (s *Server) authOIDCHuma(api huma.API, ctx huma.Context, next func(huma.Con
 			slog.Warn("failed to touch token", "error", err)
 		}
 
-		// Re-validate when the token is past half its TTL.
-		// This detects deactivated users without adding latency to every request.
 		if tok.RefreshToken != "" && s.oidcAuth != nil && s.shouldRevalidate(tok) {
 			if err := s.oidcAuth.Revalidate(asyncCtx, tok.RefreshToken); err != nil {
 				slog.Warn("OIDC re-validation failed, revoking token",
