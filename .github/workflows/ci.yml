@@ -58,7 +58,7 @@ jobs:
         run: gotestsum --junitfile unit-results.xml -- -v -timeout 120s ./internal/... -count=1
 
       - name: Test report
-        uses: mikepenz/action-junit-report@49b2ca06f62aa7ef83ae6769a2179271e160d8e4 # v6.3.1
+        uses: mikepenz/action-junit-report@bccf2e31636835cf0874589931c4116687171386 # v6.4.0
         if: always()
         with:
           report_paths: unit-results.xml
@@ -108,7 +108,7 @@ jobs:
           -run '^(TestOpenAPISpecSelfConsistency|TestAPISpecCoverage|TestAPISpecSchemaCompliance|TestDeclaredErrorCodesExercised|TestDeclaredErrorCodesCoverage|TestPulumiHTTPContractSnapshotUpToDate)$'
 
       - name: Test report
-        uses: mikepenz/action-junit-report@49b2ca06f62aa7ef83ae6769a2179271e160d8e4 # v6.3.1
+        uses: mikepenz/action-junit-report@bccf2e31636835cf0874589931c4116687171386 # v6.4.0
         if: always()
         with:
           report_paths: api-results.xml
@@ -147,7 +147,7 @@ jobs:
         run: gotestsum --junitfile cli-results.xml -- -v -timeout 600s ./tests/ -count=1
 
       - name: Test report
-        uses: mikepenz/action-junit-report@49b2ca06f62aa7ef83ae6769a2179271e160d8e4 # v6.3.1
+        uses: mikepenz/action-junit-report@bccf2e31636835cf0874589931c4116687171386 # v6.4.0
         if: always()
         with:
           report_paths: cli-results.xml
@@ -189,7 +189,7 @@ jobs:
           -v -timeout 180s ./tests/ -count=1 -run '^TestCLICompat_'
 
       - name: Test report
-        uses: mikepenz/action-junit-report@49b2ca06f62aa7ef83ae6769a2179271e160d8e4 # v6.3.1
+        uses: mikepenz/action-junit-report@bccf2e31636835cf0874589931c4116687171386 # v6.4.0
         if: always()
         with:
           report_paths: cli-compat-${{ matrix.pulumi-version }}.xml
