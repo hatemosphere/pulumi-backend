@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -734,57 +735,129 @@ func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 }
 
 // CountResources extracts the resource count from uncompressed deployment JSON.
-// CountResources counts resources in a deployment JSON without unmarshaling.
-// Scans for "resources":[ and counts top-level objects by tracking brace depth.
+// It tokenizes the JSON and counts items in deployment.resources without
+// unmarshaling the full document into memory.
 func CountResources(deployment []byte) int {
-	// Find "resources":[
-	key := []byte(`"resources":[`)
-	idx := bytes.Index(deployment, key)
-	if idx < 0 {
+	dec := stdjson.NewDecoder(bytes.NewReader(deployment))
+
+	tok, err := dec.Token()
+	if err != nil {
 		return 0
 	}
-	pos := idx + len(key)
+	delim, ok := tok.(stdjson.Delim)
+	if !ok || delim != '{' {
+		return 0
+	}
 
-	count := 0
-	depth := 0
-	inString := false
-	escaped := false
-
-	for pos < len(deployment) {
-		b := deployment[pos]
-		pos++
-
-		if escaped {
-			escaped = false
-			continue
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return 0
 		}
-		if b == '\\' && inString {
-			escaped = true
-			continue
+		key, ok := keyTok.(string)
+		if !ok {
+			return 0
 		}
-		if b == '"' {
-			inString = !inString
-			continue
+		if key == "deployment" {
+			return countResourcesInDeployment(dec)
 		}
-		if inString {
-			continue
-		}
-
-		switch b {
-		case '{':
-			if depth == 0 {
-				count++
-			}
-			depth++
-		case '}':
-			depth--
-		case ']':
-			if depth == 0 {
-				return count
-			}
+		if err := skipJSONValue(dec); err != nil {
+			return 0
 		}
 	}
+	return 0
+}
+
+func countResourcesInDeployment(dec *stdjson.Decoder) int {
+	tok, err := dec.Token()
+	if err != nil {
+		return 0
+	}
+	delim, ok := tok.(stdjson.Delim)
+	if !ok || delim != '{' {
+		return 0
+	}
+
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return 0
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return 0
+		}
+		if key == "resources" {
+			return countJSONArrayItems(dec)
+		}
+		if err := skipJSONValue(dec); err != nil {
+			return 0
+		}
+	}
+
+	return 0
+}
+
+func countJSONArrayItems(dec *stdjson.Decoder) int {
+	tok, err := dec.Token()
+	if err != nil {
+		return 0
+	}
+	delim, ok := tok.(stdjson.Delim)
+	if !ok || delim != '[' {
+		return 0
+	}
+
+	count := 0
+	for dec.More() {
+		if err := skipJSONValue(dec); err != nil {
+			return 0
+		}
+		count++
+	}
+	if _, err := dec.Token(); err != nil {
+		return 0
+	}
 	return count
+}
+
+func skipJSONValue(dec *stdjson.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	return skipJSONValueFromToken(dec, tok)
+}
+
+func skipJSONValueFromToken(dec *stdjson.Decoder, tok stdjson.Token) error {
+	delim, ok := tok.(stdjson.Delim)
+	if !ok {
+		return nil
+	}
+
+	switch delim {
+	case '{':
+		for dec.More() {
+			if _, err := dec.Token(); err != nil {
+				return err
+			}
+			if err := skipJSONValue(dec); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token()
+		return err
+	case '[':
+		for dec.More() {
+			if err := skipJSONValue(dec); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token()
+		return err
+	default:
+		return nil
+	}
 }
 
 // --- Updates ---
@@ -886,6 +959,13 @@ func (s *SQLiteStore) RenewLease(ctx context.Context, id string, newToken string
 func (s *SQLiteStore) CancelUpdate(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE updates SET status='cancelled', completed_at=? WHERE id=?`, time.Now().Unix(), id)
 	return err
+}
+
+// CountActiveUpdates returns the number of in-progress updates.
+func (s *SQLiteStore) CountActiveUpdates(ctx context.Context) (int64, error) {
+	var count int64
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM updates WHERE status='in-progress'`).Scan(&count)
+	return count, err
 }
 
 // --- Journal ---

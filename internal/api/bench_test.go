@@ -61,7 +61,7 @@ func BenchmarkListVisibleStacksPage(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for b.Loop() {
-		stacks, nextToken, err := srv.listVisibleStacksPage(ctx, "organization", "", "", 50)
+		stacks, nextToken, err := srv.listVisibleStacksPage(ctx, "organization", "", "", 50, "", "")
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -185,6 +185,10 @@ func (*sqliteBenchmarkTokenStore) GetActiveUpdate(ctx context.Context, org, proj
 
 func (*sqliteBenchmarkTokenStore) CancelUpdate(ctx context.Context, updateID string) error {
 	panic("not used")
+}
+
+func (*sqliteBenchmarkTokenStore) CountActiveUpdates(context.Context) (int64, error) {
+	return 0, nil
 }
 
 func (*sqliteBenchmarkTokenStore) SaveJournalEntries(ctx context.Context, entries []storage.JournalEntry) error {

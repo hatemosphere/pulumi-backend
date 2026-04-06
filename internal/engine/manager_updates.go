@@ -24,7 +24,7 @@ type CreateUpdateResult struct {
 	UpdateID string
 }
 
-// cleanupExpiredUpdate attempts to auto-cancel an expired active update.
+// cleanupExpiredUpdate attempts to auto-cancel an expired in-progress update.
 func (m *Manager) cleanupExpiredUpdate(ctx context.Context, org, project, stack string, active *storage.Update) error {
 	if active.Status == "in-progress" && m.clock.Now().After(active.TokenExpiresAt) {
 		if err := m.store.CancelUpdate(ctx, active.ID); err != nil {
@@ -33,9 +33,6 @@ func (m *Manager) cleanupExpiredUpdate(ctx context.Context, org, project, stack 
 		}
 		m.releaseStackLock(org, project, stack)
 		m.activeUpdates.Add(-1)
-		return nil
-	}
-	if active.Status == "not-started" && m.clock.Now().After(active.TokenExpiresAt.Add(m.leaseDuration)) {
 		return nil
 	}
 	return ErrStackHasActiveUpdate

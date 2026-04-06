@@ -52,6 +52,10 @@ func (m *MockStore) SaveState(ctx context.Context, state *storage.StackState) er
 	return args.Error(0)
 }
 
+func (*MockStore) CountActiveUpdates(context.Context) (int64, error) {
+	return 0, nil
+}
+
 func TestSaveCheckpointDelta(t *testing.T) {
 	store := new(MockStore)
 	mgr, err := NewManager(store, nil)

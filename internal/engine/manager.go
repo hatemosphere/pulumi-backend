@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -163,6 +164,13 @@ func NewManager(store storage.Store, secrets *SecretsEngine, cfgs ...ManagerConf
 			done: make(chan struct{}),
 		},
 	}
+
+	activeCount, err := store.CountActiveUpdates(cfg.BackgroundContext)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("count active updates: %w", err)
+	}
+	m.activeUpdates.Store(activeCount)
 
 	// Start the periodic event flusher.
 	go m.eventFlusher(cfg.EventFlushInterval)

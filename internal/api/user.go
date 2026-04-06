@@ -56,7 +56,15 @@ func (s *Server) registerUser(api huma.API) {
 			pageSize = defaultVisibleStackPageSize
 		}
 
-		stacks, nextToken, err := s.listVisibleStacksPage(ctx, input.Organization, input.Project, input.ContinuationToken, pageSize)
+		stacks, nextToken, err := s.listVisibleStacksPage(
+			ctx,
+			input.Organization,
+			input.Project,
+			input.ContinuationToken,
+			pageSize,
+			input.TagName,
+			input.TagValue,
+		)
 		if err != nil {
 			return nil, internalError(err)
 		}
@@ -88,7 +96,7 @@ func (s *Server) registerUser(api huma.API) {
 		Path:        "/api/stacks/{orgName}",
 		Tags:        []string{"Stacks"},
 	}, func(ctx context.Context, input *ListOrgStacksInput) (*ListOrgStacksOutput, error) {
-		stacks, nextToken, err := s.listVisibleStacksPage(ctx, input.OrgName, "", input.ContinuationToken, defaultVisibleStackPageSize)
+		stacks, nextToken, err := s.listVisibleStacksPage(ctx, input.OrgName, "", input.ContinuationToken, defaultVisibleStackPageSize, "", "")
 		if err != nil {
 			return nil, internalError(err)
 		}
@@ -102,11 +110,19 @@ func (s *Server) registerUser(api huma.API) {
 	})
 }
 
-func (s *Server) listVisibleStacksPage(ctx context.Context, org, project, continuationToken string, pageSize int) ([]storage.Stack, string, error) {
+func (s *Server) listVisibleStacksPage(
+	ctx context.Context,
+	org,
+	project,
+	continuationToken string,
+	pageSize int,
+	tagName,
+	tagValue string,
+) ([]storage.Stack, string, error) {
 	if pageSize <= 0 {
 		pageSize = defaultVisibleStackPageSize
 	}
-	if s.rbac == nil {
+	if s.rbac == nil && tagName == "" && tagValue == "" {
 		return s.engine.ListStacks(ctx, org, project, continuationToken, pageSize)
 	}
 
@@ -118,10 +134,14 @@ func (s *Server) listVisibleStacksPage(ctx context.Context, org, project, contin
 			return nil, "", err
 		}
 
-		filtered := s.filterStacksByRBAC(ctx, stacks)
+		filtered := s.filterStacks(ctx, stacks, tagName, tagValue)
 		remaining := pageSize - len(visible)
 		if len(filtered) > remaining {
 			visible = append(visible, filtered[:remaining]...)
+			return visible, continuationTokenForStack(filtered[remaining-1]), nil
+		}
+		if len(filtered) == remaining {
+			visible = append(visible, filtered...)
 			return visible, nextToken, nil
 		}
 		visible = append(visible, filtered...)
@@ -134,20 +154,44 @@ func (s *Server) listVisibleStacksPage(ctx context.Context, org, project, contin
 	return visible, token, nil
 }
 
-// filterStacksByRBAC removes stacks the user does not have at least read
-// access to. If RBAC is not configured (single-tenant mode), all stacks pass.
-func (s *Server) filterStacksByRBAC(ctx context.Context, stacks []storage.Stack) []storage.Stack {
-	if s.rbac == nil {
-		return stacks
-	}
+func continuationTokenForStack(st storage.Stack) string {
+	return st.OrgName + "/" + st.ProjectName + "/" + st.StackName
+}
+
+// filterStacks removes stacks that do not match the requested filters or do
+// not have at least read access under RBAC.
+func (s *Server) filterStacks(ctx context.Context, stacks []storage.Stack, tagName, tagValue string) []storage.Stack {
 	identity := auth.IdentityFromContext(ctx)
 	filtered := make([]storage.Stack, 0, len(stacks))
 	for _, st := range stacks {
-		if s.rbac.Resolve(identity, st.OrgName, st.ProjectName, st.StackName) >= auth.PermissionRead {
-			filtered = append(filtered, st)
+		if s.rbac != nil && s.rbac.Resolve(identity, st.OrgName, st.ProjectName, st.StackName) < auth.PermissionRead {
+			continue
 		}
+		if !matchesTagFilter(st.Tags, tagName, tagValue) {
+			continue
+		}
+		filtered = append(filtered, st)
 	}
 	return filtered
+}
+
+func matchesTagFilter(tags map[string]string, tagName, tagValue string) bool {
+	if tagName != "" {
+		value, ok := tags[tagName]
+		if !ok {
+			return false
+		}
+		return tagValue == "" || value == tagValue
+	}
+	if tagValue != "" {
+		for _, value := range tags {
+			if value == tagValue {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }
 
 // stacksToSummaries converts storage stacks to API StackSummary values.

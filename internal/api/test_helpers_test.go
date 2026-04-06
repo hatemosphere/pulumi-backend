@@ -59,6 +59,10 @@ func (m *MockStore) RenewLease(ctx context.Context, id string, token string, exp
 	return args.Error(0)
 }
 
+func (*MockStore) CountActiveUpdates(context.Context) (int64, error) {
+	return 0, nil
+}
+
 // newSQLiteTestServer creates a Server backed by a real SQLite database in a temp dir.
 func newSQLiteTestServer(t testing.TB) *Server {
 	t.Helper()

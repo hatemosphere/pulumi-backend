@@ -143,7 +143,6 @@ type ListUserStacksInput struct {
 	TagName           string `query:"tagName" doc:"Filter by tag name"`
 	TagValue          string `query:"tagValue" doc:"Filter by tag value"`
 	MaxResults        int    `query:"maxResults" doc:"Maximum results per page"`
-	RoleID            string `query:"roleID" doc:"Filter by role ID"`
 	ContinuationToken string `query:"continuationToken" doc:"Pagination continuation token"`
 }
 

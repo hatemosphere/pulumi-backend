@@ -73,6 +73,85 @@ func TestStackHandlers_CreateAndGetStack(t *testing.T) {
 	assert.Equal(t, 0, body.Version)
 }
 
+func TestStackHandlers_CreateStackWithTagsAndState(t *testing.T) {
+	api := newTestAPI(t)
+
+	rec := api.do(http.MethodPost, "/api/stacks/organization/project", map[string]any{
+		"stackName": "dev",
+		"tags": map[string]string{
+			"env": "prod",
+		},
+		"state": map[string]any{
+			"version": 3,
+			"deployment": map[string]any{
+				"manifest": map[string]any{
+					"time":    "2024-01-01T00:00:00Z",
+					"magic":   "test",
+					"version": "v3.0.0",
+				},
+				"resources": []map[string]any{
+					{
+						"urn":  "urn:pulumi:dev::project::pulumi:pulumi:Stack::project-dev",
+						"type": "pulumi:pulumi:Stack",
+					},
+				},
+			},
+		},
+	})
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	rec = api.do(http.MethodGet, "/api/stacks/organization/project/dev", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Tags    map[string]string `json:"tags"`
+		Version int               `json:"version"`
+	}
+	api.jsonBody(rec, &body)
+	assert.Equal(t, "prod", body.Tags["env"])
+	assert.Equal(t, 1, body.Version)
+
+	rec = api.do(http.MethodGet, "/api/stacks/organization/project/dev/export", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `project-dev`)
+}
+
+func TestStackHandlers_CreateStackRejectsUnsupportedFields(t *testing.T) {
+	api := newTestAPI(t)
+
+	tests := []struct {
+		name    string
+		body    map[string]any
+		message string
+	}{
+		{
+			name: "teams",
+			body: map[string]any{
+				"stackName": "dev",
+				"teams":     []string{"platform"},
+			},
+			message: "teams are not supported",
+		},
+		{
+			name: "config",
+			body: map[string]any{
+				"stackName": "dev",
+				"config": map[string]any{
+					"environment": "project/dev",
+				},
+			},
+			message: "remote config is not supported",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := api.do(http.MethodPost, "/api/stacks/organization/project", tt.body)
+			require.Equal(t, http.StatusBadRequest, rec.Code)
+			assert.Contains(t, rec.Body.String(), tt.message)
+		})
+	}
+}
+
 func TestStackHandlers_GetNonExistentStack(t *testing.T) {
 	api := newTestAPI(t)
 	rec := api.do(http.MethodGet, "/api/stacks/organization/test-project/nonexistent", nil)
@@ -248,11 +327,81 @@ func TestListVisibleStacksPageFillsVisibleResultsUnderRBAC(t *testing.T) {
 	require.NoError(t, srv.engine.CreateStack(ctx, "organization", "proj-b", "stack-2", nil))
 	require.NoError(t, srv.engine.CreateStack(ctx, "organization", "proj-c", "stack-3", nil))
 
-	stacks, nextToken, err := srv.listVisibleStacksPage(ctx, "organization", "", "", 2)
+	stacks, nextToken, err := srv.listVisibleStacksPage(ctx, "organization", "", "", 2, "", "")
 	require.NoError(t, err)
 	require.Len(t, stacks, 2)
 	assert.Equal(t, "proj-a", stacks[0].ProjectName)
 	assert.Equal(t, "proj-c", stacks[1].ProjectName)
+	assert.Equal(t, "", nextToken)
+}
+
+func TestListVisibleStacksPageContinuationWhenPageFillsExactly(t *testing.T) {
+	resolver, err := auth.NewRBACResolver(&auth.RBACConfig{
+		DefaultPermission: "none",
+		StackPolicies: []auth.StackPolicy{
+			{Group: "devs", StackPattern: "organization/proj-a/*", Permission: "read"},
+			{Group: "devs", StackPattern: "organization/proj-b/*", Permission: "read"},
+			{Group: "devs", StackPattern: "organization/proj-d/*", Permission: "read"},
+		},
+	})
+	require.NoError(t, err)
+
+	srv := newSQLiteTestServerWithOptions(t, WithRBAC(resolver))
+	ctx := auth.WithIdentity(context.Background(), &auth.UserIdentity{
+		UserName: "dev@example.com",
+		Groups:   []string{"devs"},
+	})
+
+	for _, project := range []string{"proj-a", "proj-b", "proj-c", "proj-d"} {
+		require.NoError(t, srv.engine.CreateStack(ctx, "organization", project, "stack", nil))
+	}
+
+	stacks, nextToken, err := srv.listVisibleStacksPage(ctx, "organization", "", "", 2, "", "")
+	require.NoError(t, err)
+	require.Len(t, stacks, 2)
+	assert.Equal(t, "proj-a", stacks[0].ProjectName)
+	assert.Equal(t, "proj-b", stacks[1].ProjectName)
+	assert.Equal(t, "organization/proj-b/stack", nextToken)
+
+	stacks, nextToken, err = srv.listVisibleStacksPage(ctx, "organization", "", nextToken, 2, "", "")
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+	assert.Equal(t, "proj-d", stacks[0].ProjectName)
+	assert.Equal(t, "", nextToken)
+}
+
+func TestListVisibleStacksPageDoesNotSkipVisibleStacksWithinRawPage(t *testing.T) {
+	resolver, err := auth.NewRBACResolver(&auth.RBACConfig{
+		DefaultPermission: "none",
+		StackPolicies: []auth.StackPolicy{
+			{Group: "devs", StackPattern: "organization/proj-a/*", Permission: "read"},
+			{Group: "devs", StackPattern: "organization/proj-c/*", Permission: "read"},
+			{Group: "devs", StackPattern: "organization/proj-d/*", Permission: "read"},
+		},
+	})
+	require.NoError(t, err)
+
+	srv := newSQLiteTestServerWithOptions(t, WithRBAC(resolver))
+	ctx := auth.WithIdentity(context.Background(), &auth.UserIdentity{
+		UserName: "dev@example.com",
+		Groups:   []string{"devs"},
+	})
+
+	for _, project := range []string{"proj-a", "proj-b", "proj-c", "proj-d"} {
+		require.NoError(t, srv.engine.CreateStack(ctx, "organization", project, "stack", nil))
+	}
+
+	stacks, nextToken, err := srv.listVisibleStacksPage(ctx, "organization", "", "", 2, "", "")
+	require.NoError(t, err)
+	require.Len(t, stacks, 2)
+	assert.Equal(t, "proj-a", stacks[0].ProjectName)
+	assert.Equal(t, "proj-c", stacks[1].ProjectName)
+	assert.Equal(t, "organization/proj-c/stack", nextToken)
+
+	stacks, nextToken, err = srv.listVisibleStacksPage(ctx, "organization", "", nextToken, 2, "", "")
+	require.NoError(t, err)
+	require.Len(t, stacks, 1)
+	assert.Equal(t, "proj-d", stacks[0].ProjectName)
 	assert.Equal(t, "", nextToken)
 }
 
@@ -313,6 +462,43 @@ func TestStackHandlers_UserStacksFilterByProject(t *testing.T) {
 	for _, s := range listResp.Stacks {
 		assert.Equal(t, "alpha", s.ProjectName)
 	}
+}
+
+func TestStackHandlers_UserStacksFilterByTag(t *testing.T) {
+	api := newTestAPI(t)
+
+	api.do(http.MethodPost, "/api/stacks/organization/alpha", map[string]any{
+		"stackName": "dev",
+		"tags": map[string]string{
+			"env":  "prod",
+			"team": "platform",
+		},
+	})
+	api.do(http.MethodPost, "/api/stacks/organization/beta", map[string]any{
+		"stackName": "dev",
+		"tags": map[string]string{
+			"env": "staging",
+		},
+	})
+
+	rec := api.do(http.MethodGet, "/api/user/stacks?organization=organization&tagName=env&tagValue=prod", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var listResp struct {
+		Stacks []struct {
+			ProjectName string            `json:"projectName"`
+			Tags        map[string]string `json:"tags"`
+		} `json:"stacks"`
+	}
+	api.jsonBody(rec, &listResp)
+	require.Len(t, listResp.Stacks, 1)
+	assert.Equal(t, "alpha", listResp.Stacks[0].ProjectName)
+	assert.Equal(t, "prod", listResp.Stacks[0].Tags["env"])
+
+	rec = api.do(http.MethodGet, "/api/user/stacks?organization=organization&tagValue=platform", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	api.jsonBody(rec, &listResp)
+	require.Len(t, listResp.Stacks, 1)
+	assert.Equal(t, "alpha", listResp.Stacks[0].ProjectName)
 }
 
 func TestStackHandlers_OrgStacksListing(t *testing.T) {

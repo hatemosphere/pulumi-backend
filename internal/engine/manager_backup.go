@@ -16,7 +16,7 @@ func (m *Manager) Backup(ctx context.Context) (*BackupResult, error) {
 	ctx, span := tracer.Start(ctx, "engine.Backup")
 	defer span.End()
 	if m.backupDir == "" && len(m.backupProviders) == 0 {
-		return nil, errors.New("no backup destination configured (use -backup-dir and/or -backup-s3-bucket)")
+		return nil, errors.New("no backup destination configured (use -backup-dir and/or -backup-destination)")
 	}
 
 	dir := m.backupDir
@@ -25,6 +25,13 @@ func (m *Manager) Backup(ctx context.Context) (*BackupResult, error) {
 	}
 	filename := fmt.Sprintf("backup-%s.db", m.clock.Now().Format("20060102-150405"))
 	localPath := filepath.Join(dir, filename)
+	if m.backupDir == "" {
+		defer func() {
+			if err := os.Remove(localPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				slog.Warn("failed to remove temporary backup", "path", localPath, "error", err)
+			}
+		}()
+	}
 
 	if err := m.store.Backup(ctx, localPath); err != nil {
 		return nil, fmt.Errorf("backup: %w", err)
@@ -38,10 +45,12 @@ func (m *Manager) Backup(ctx context.Context) (*BackupResult, error) {
 		result.LocalPath = localPath
 	}
 
+	var uploadErrs []error
 	for _, p := range m.backupProviders {
 		key, err := p.Upload(ctx, localPath)
 		if err != nil {
 			slog.Error("backup upload failed", "provider", p.Name(), "error", err)
+			uploadErrs = append(uploadErrs, fmt.Errorf("%s: %w", p.Name(), err))
 			continue
 		}
 		result.RemoteKeys[p.Name()] = key
@@ -56,8 +65,8 @@ func (m *Manager) Backup(ctx context.Context) (*BackupResult, error) {
 		}
 	}
 
-	if m.backupDir == "" {
-		os.Remove(localPath) //nolint:errcheck
+	if m.backupDir == "" && len(m.backupProviders) > 0 && len(result.RemoteKeys) == 0 {
+		return nil, fmt.Errorf("backup: no remote uploads succeeded: %w", errors.Join(uploadErrs...))
 	}
 
 	return result, nil

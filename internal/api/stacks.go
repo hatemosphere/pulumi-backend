@@ -26,6 +26,15 @@ func validateCreateStackInput(input *CreateStackInput) error {
 	if err := validateName(input.ProjectName, "project"); err != nil {
 		return huma.NewError(http.StatusBadRequest, err.Error())
 	}
+	if err := validateStackTags(input.Body.Tags); err != nil {
+		return huma.NewError(http.StatusBadRequest, err.Error())
+	}
+	if len(input.Body.Teams) > 0 {
+		return huma.NewError(http.StatusBadRequest, "teams are not supported")
+	}
+	if input.Body.Config != nil {
+		return huma.NewError(http.StatusBadRequest, "remote config is not supported")
+	}
 	return nil
 }
 
@@ -51,6 +60,10 @@ func resolveRenameProject(input *RenameStackInput) (string, error) {
 		return "", huma.NewError(http.StatusBadRequest, err.Error())
 	}
 	return newProject, nil
+}
+
+func marshalUntypedDeployment(state *UntypedDeployment) ([]byte, error) {
+	return json.Marshal(state)
 }
 
 // exportStack handles both versioned and unversioned stack export with gzip negotiation.
@@ -125,12 +138,24 @@ func (s *Server) registerStacks(api huma.API) {
 			return nil, err
 		}
 
-		err := s.engine.CreateStack(ctx, input.OrgName, input.ProjectName, input.Body.StackName, nil)
+		err := s.engine.CreateStack(ctx, input.OrgName, input.ProjectName, input.Body.StackName, input.Body.Tags)
 		if err != nil {
 			if errors.Is(err, storage.ErrStackAlreadyExists) {
 				return nil, huma.NewError(http.StatusConflict, "a stack with that name already exists")
 			}
 			return nil, conflictError(err)
+		}
+
+		if input.Body.State != nil {
+			deployment, err := marshalUntypedDeployment(input.Body.State)
+			if err != nil {
+				_ = s.engine.DeleteStack(ctx, input.OrgName, input.ProjectName, input.Body.StackName, true)
+				return nil, internalError(err)
+			}
+			if err := s.engine.ImportState(ctx, input.OrgName, input.ProjectName, input.Body.StackName, deployment); err != nil {
+				_ = s.engine.DeleteStack(ctx, input.OrgName, input.ProjectName, input.Body.StackName, true)
+				return nil, conflictOrInternalError(err)
+			}
 		}
 
 		stackOperationsTotal.WithLabelValues("create").Inc()
@@ -183,10 +208,8 @@ func (s *Server) registerStacks(api huma.API) {
 		DefaultStatus: 204,
 		Errors:        []int{400},
 	}, func(ctx context.Context, input *UpdateStackTagsInput) (*struct{}, error) {
-		for key := range input.Body {
-			if key == "" {
-				return nil, huma.NewError(http.StatusBadRequest, "tag key must not be empty")
-			}
+		if err := validateStackTags(input.Body); err != nil {
+			return nil, huma.NewError(http.StatusBadRequest, err.Error())
 		}
 		err := s.engine.UpdateStackTags(ctx, input.OrgName, input.ProjectName, input.StackName, input.Body)
 		if err != nil {

@@ -137,6 +137,7 @@ type Store interface {
 	RenewLease(ctx context.Context, updateID string, newToken string, newExpiry time.Time) error
 	GetActiveUpdate(ctx context.Context, org, project, stack string) (*Update, error)
 	CancelUpdate(ctx context.Context, updateID string) error
+	CountActiveUpdates(ctx context.Context) (int64, error)
 
 	// Journal entries
 	SaveJournalEntries(ctx context.Context, entries []JournalEntry) error

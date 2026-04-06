@@ -1,6 +1,9 @@
 package api
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+)
 
 // validateName checks that a stack or project name is valid.
 func validateName(name, kind string) error {
@@ -21,4 +24,24 @@ func validateName(name, kind string) error {
 func isValidNameChar(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
 		r == '-' || r == '_' || r == '.'
+}
+
+var stackTagNamePattern = regexp.MustCompile(`^[a-zA-Z0-9\-_.:]{1,40}$`)
+
+func validateStackTags(tags map[string]string) error {
+	for key, value := range tags {
+		if key == "" {
+			return fmt.Errorf("invalid stack tag %q", key)
+		}
+		if len(key) > 40 {
+			return fmt.Errorf("stack tag %q is too long (max length 40 characters)", key)
+		}
+		if !stackTagNamePattern.MatchString(key) {
+			return fmt.Errorf("stack tag names may only contain alphanumerics, hyphens, underscores, periods, or colons")
+		}
+		if len(value) > 256 {
+			return fmt.Errorf("stack tag %q value is too long (max length 256 characters)", key)
+		}
+	}
+	return nil
 }

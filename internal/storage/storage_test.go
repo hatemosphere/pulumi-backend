@@ -87,6 +87,43 @@ func isGzipped(data []byte) bool {
 	return len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b
 }
 
+func TestCountResources(t *testing.T) {
+	tests := []struct {
+		name       string
+		deployment []byte
+		want       int
+	}{
+		{
+			name:       "compact",
+			deployment: []byte(`{"version":3,"deployment":{"resources":[{"urn":"a"},{"urn":"b"}]}}`),
+			want:       2,
+		},
+		{
+			name:       "pretty printed",
+			deployment: []byte("{\n  \"version\": 3,\n  \"deployment\": {\n    \"resources\": [\n      {\"urn\": \"a\"},\n      {\"urn\": \"b\"}\n    ]\n  }\n}\n"),
+			want:       2,
+		},
+		{
+			name:       "null resources",
+			deployment: []byte(`{"version":3,"deployment":{"resources":null}}`),
+			want:       0,
+		},
+		{
+			name:       "invalid json",
+			deployment: []byte(`{"version":3,"deployment":{"resources":[}`),
+			want:       0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CountResources(tt.deployment); got != tt.want {
+				t.Fatalf("CountResources() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStackLifecycle(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
@@ -239,6 +276,13 @@ func TestUpdateLifecycle(t *testing.T) {
 	if active != nil {
 		t.Fatal("expected no active update initially since it is not-started")
 	}
+	count, err := store.CountActiveUpdates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 active updates initially, got %d", count)
+	}
 
 	// 3. Start Update
 	expires := time.Now().Add(time.Hour)
@@ -252,6 +296,13 @@ func TestUpdateLifecycle(t *testing.T) {
 	}
 	if active.Status != "in-progress" {
 		t.Fatalf("expected status form active: %s", active.Status)
+	}
+	count, err = store.CountActiveUpdates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 active update after start, got %d", count)
 	}
 
 	// 4. Renew Lease
@@ -277,6 +328,13 @@ func TestUpdateLifecycle(t *testing.T) {
 	active, _ = store.GetActiveUpdate(ctx, "org", "proj", "stack")
 	if active != nil {
 		t.Fatal("expected no active update after completion")
+	}
+	count, err = store.CountActiveUpdates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 active updates after completion, got %d", count)
 	}
 }
 
