@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 )
@@ -37,7 +38,7 @@ func validateStackTags(tags map[string]string) error {
 			return fmt.Errorf("stack tag %q is too long (max length 40 characters)", key)
 		}
 		if !stackTagNamePattern.MatchString(key) {
-			return fmt.Errorf("stack tag names may only contain alphanumerics, hyphens, underscores, periods, or colons")
+			return errors.New("stack tag names may only contain alphanumerics, hyphens, underscores, periods, or colons")
 		}
 		if len(value) > 256 {
 			return fmt.Errorf("stack tag %q value is too long (max length 256 characters)", key)
