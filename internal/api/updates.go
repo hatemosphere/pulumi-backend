@@ -115,6 +115,10 @@ func registerCheckpointRoute[T any](api huma.API, op huma.Operation, metricLabel
 	huma.Register(api, op, func(ctx context.Context, input *T) (*struct{}, error) {
 		size, err := save(ctx, input)
 		if err != nil {
+			var statusErr huma.StatusError
+			if errors.As(err, &statusErr) {
+				return nil, err
+			}
 			return nil, conflictOrInternalError(err)
 		}
 		if size > 0 {
@@ -122,6 +126,20 @@ func registerCheckpointRoute[T any](api huma.API, op huma.Operation, metricLabel
 		}
 		return nil, nil
 	})
+}
+
+func (s *Server) requireUpdateForPath(ctx context.Context, params UpdateParams) (*storage.Update, error) {
+	u, err := s.engine.GetUpdate(ctx, params.UpdateID)
+	if err != nil {
+		return nil, updateNotFoundOrInternalError(err)
+	}
+	if u == nil ||
+		u.OrgName != params.OrgName ||
+		u.ProjectName != params.ProjectName ||
+		u.StackName != params.StackName {
+		return nil, updateNotFoundError()
+	}
+	return u, nil
 }
 
 func (s *Server) registerUpdates(api huma.API) {
@@ -138,6 +156,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		Tags:        []string{"Updates"},
 		Errors:      []int{409},
 	}, func(ctx context.Context, input *StartUpdateInput) (*StartUpdateOutput, error) {
+		if _, err := s.requireUpdateForPath(ctx, input.UpdateParams); err != nil {
+			return nil, err
+		}
 		result, err := s.engine.StartUpdate(ctx, input.UpdateID, input.Body.Tags, input.Body.JournalVersion)
 		if err != nil {
 			return nil, conflictError(err)
@@ -158,12 +179,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		Tags:        []string{"Updates"},
 		Errors:      []int{404},
 	}, func(ctx context.Context, input *GetUpdateStatusInput) (*GetUpdateStatusOutput, error) {
-		u, err := s.engine.GetUpdate(ctx, input.UpdateID)
+		u, err := s.requireUpdateForPath(ctx, input.UpdateParams)
 		if err != nil {
-			return nil, updateNotFoundOrInternalError(err)
-		}
-		if u == nil {
-			return nil, updateNotFoundError()
+			return nil, err
 		}
 
 		out := &GetUpdateStatusOutput{}
@@ -186,9 +204,12 @@ func (s *Server) registerUpdates(api huma.API) {
 		Errors:        []int{409},
 	}, func(ctx context.Context, input *CompleteUpdateInput) (*struct{}, error) {
 		// Fetch update before completing to record duration metric.
-		u, _ := s.engine.GetUpdate(ctx, input.UpdateID)
+		u, err := s.requireUpdateForPath(ctx, input.UpdateParams)
+		if err != nil {
+			return nil, err
+		}
 
-		err := s.engine.CompleteUpdate(ctx, input.UpdateID, input.Body.Status, input.Body.Result)
+		err = s.engine.CompleteUpdate(ctx, input.UpdateID, input.Body.Status, input.Body.Result)
 		if err != nil {
 			return nil, conflictOrInternalError(err)
 		}
@@ -207,6 +228,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		Tags:        []string{"Updates"},
 	}, func(ctx context.Context, input *RenewLeaseInput) (*RenewLeaseOutput, error) {
 		duration := time.Duration(input.Body.Duration) * time.Second
+		if _, err := s.requireUpdateForPath(ctx, input.UpdateParams); err != nil {
+			return nil, err
+		}
 		result, err := s.engine.RenewLease(ctx, input.UpdateID, duration)
 		if err != nil {
 			return nil, internalError(err)
@@ -244,6 +268,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		DefaultStatus: 200,
 		Errors:        []int{409},
 	}, "full", func(ctx context.Context, input *PatchCheckpointInput) (int, error) {
+		if _, err := s.requireUpdateForPath(ctx, input.UpdateParams); err != nil {
+			return 0, err
+		}
 		if input.Body.IsInvalid {
 			return 0, nil
 		}
@@ -273,6 +300,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		DefaultStatus: 200,
 		Errors:        []int{409},
 	}, "verbatim", func(ctx context.Context, input *PatchCheckpointVerbatimInput) (int, error) {
+		if _, err := s.requireUpdateForPath(ctx, input.UpdateParams); err != nil {
+			return 0, err
+		}
 		err := s.engine.SaveCheckpoint(ctx, input.UpdateID, input.Body.UntypedDeployment)
 		if err != nil {
 			return 0, err
@@ -289,6 +319,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		DefaultStatus: 200,
 		Errors:        []int{409},
 	}, "delta", func(ctx context.Context, input *PatchCheckpointDeltaInput) (int, error) {
+		if _, err := s.requireUpdateForPath(ctx, input.UpdateParams); err != nil {
+			return 0, err
+		}
 		err := s.engine.SaveCheckpointDelta(ctx, input.UpdateID, input.Body.CheckpointHash, input.Body.DeploymentDelta, input.Body.SequenceNumber)
 		if err != nil {
 			return 0, err
@@ -307,6 +340,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		DefaultStatus: 200,
 		Errors:        []int{400},
 	}, func(ctx context.Context, input *SaveJournalEntriesInput) (*struct{}, error) {
+		if _, err := s.requireUpdateForPath(ctx, input.UpdateParams); err != nil {
+			return nil, err
+		}
 		err := s.engine.SaveJournalEntries(ctx, input.UpdateID, input.Body.Entries)
 		if err != nil {
 			return nil, internalError(err)
@@ -324,6 +360,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		MaxBodyBytes:  4 << 20,
 		DefaultStatus: 200,
 	}, func(ctx context.Context, input *PostEventInput) (*struct{}, error) {
+		if _, err := s.requireUpdateForPath(ctx, input.UpdateParams); err != nil {
+			return nil, err
+		}
 		// Copy RawBody: huma pools the buffer, but SaveEngineEvents
 		// buffers events asynchronously beyond the handler lifetime.
 		event := copyBody(input.RawBody)
@@ -342,6 +381,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		MaxBodyBytes:  16 << 20,
 		DefaultStatus: 200,
 	}, func(ctx context.Context, input *PostEventsBatchInput) (*struct{}, error) {
+		if _, err := s.requireUpdateForPath(ctx, input.UpdateParams); err != nil {
+			return nil, err
+		}
 		err := s.engine.SaveEngineEvents(ctx, input.UpdateID, input.Body.Events)
 		if err != nil {
 			return nil, internalError(err)
@@ -357,12 +399,9 @@ func (s *Server) registerUpdates(api huma.API) {
 		Tags:        []string{"Events"},
 		Errors:      []int{400, 404},
 	}, func(ctx context.Context, input *GetEventsInput) (*GetEventsOutput, error) {
-		u, err := s.engine.GetUpdate(ctx, input.UpdateID)
+		u, err := s.requireUpdateForPath(ctx, input.UpdateParams)
 		if err != nil {
-			return nil, updateNotFoundOrInternalError(err)
-		}
-		if u == nil {
-			return nil, updateNotFoundError()
+			return nil, err
 		}
 
 		var offset int

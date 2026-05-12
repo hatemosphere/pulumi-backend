@@ -26,8 +26,12 @@ func TestGetUpdateStatusAPI(t *testing.T) {
 	srv.registerUpdates(api)
 
 	store.On("GetUpdate", mock.Anything, "up-1").Return(&storage.Update{
-		ID:     "up-1",
-		Status: "succeeded",
+		ID:          "up-1",
+		OrgName:     "org",
+		ProjectName: "proj",
+		StackName:   "stack",
+		Kind:        "update",
+		Status:      "succeeded",
 	}, nil)
 
 	resp := api.Get("/api/stacks/org/proj/stack/update/up-1")
@@ -59,8 +63,12 @@ func TestGetUpdateStatusAPI_InProgressHasContinuationToken(t *testing.T) {
 	srv.registerUpdates(api)
 
 	store.On("GetUpdate", mock.Anything, "up-2").Return(&storage.Update{
-		ID:     "up-2",
-		Status: "in-progress",
+		ID:          "up-2",
+		OrgName:     "org",
+		ProjectName: "proj",
+		StackName:   "stack",
+		Kind:        "update",
+		Status:      "in-progress",
 	}, nil)
 
 	resp := api.Get("/api/stacks/org/proj/stack/update/up-2")
@@ -179,6 +187,69 @@ func TestUpdateHandlers_Lifecycle(t *testing.T) {
 	}
 	api.jsonBody(rec, &finalEvents)
 	assert.Nil(t, finalEvents.ContinuationToken)
+}
+
+func TestUpdateHandlers_RejectMismatchedUpdatePath(t *testing.T) {
+	api := newTestAPI(t)
+	setup := api.createStackAndUpdate(t, "dev")
+	api.do(http.MethodPost, "/api/stacks/organization/test-project", map[string]string{"stackName": "prod"})
+
+	wrongStackPath := api.updatePath("prod", setup.updateID)
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{name: "start wrong stack", method: http.MethodPost, path: wrongStackPath, body: map[string]any{}},
+		{name: "status wrong stack", method: http.MethodGet, path: wrongStackPath},
+		{name: "events wrong stack before start", method: http.MethodGet, path: wrongStackPath + "/events"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := api.do(tc.method, tc.path, tc.body)
+			assert.Equal(t, http.StatusNotFound, rec.Code)
+			assert.Contains(t, rec.Body.String(), "update not found")
+		})
+	}
+
+	api.startUpdate(t, "dev", setup.updateID, map[string]any{"tags": map[string]string{}, "journalVersion": 1})
+
+	deployment := map[string]any{
+		"manifest":  map[string]any{"time": "2024-01-01T00:00:00Z", "magic": "test", "version": "v3.0.0"},
+		"resources": []map[string]any{{"urn": "urn:pulumi:dev::test-project::pulumi:pulumi:Stack::test-project-dev", "type": "pulumi:pulumi:Stack"}},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{name: "renew lease", method: http.MethodPost, path: wrongStackPath + "/renew_lease", body: map[string]any{"duration": 300}},
+		{name: "checkpoint", method: http.MethodPatch, path: wrongStackPath + "/checkpoint", body: map[string]any{"version": 3, "deployment": deployment}},
+		{name: "checkpoint verbatim", method: http.MethodPatch, path: wrongStackPath + "/checkpointverbatim", body: map[string]any{"version": 3, "untypedDeployment": json.RawMessage(`{"version":3,"deployment":{"resources":[]}}`)}},
+		{name: "checkpoint delta", method: http.MethodPatch, path: wrongStackPath + "/checkpointdelta", body: map[string]any{"version": 3, "checkpointHash": "unused", "deploymentDelta": "unused", "sequenceNumber": 1}},
+		{name: "journal entries", method: http.MethodPatch, path: wrongStackPath + "/journalentries", body: map[string]any{"entries": []map[string]any{{"sequenceID": 1, "kind": "begin"}}}},
+		{name: "post event", method: http.MethodPost, path: wrongStackPath + "/events", body: map[string]any{"sequence": 1, "timestamp": 12345, "type": "preludeEvent"}},
+		{name: "post events batch", method: http.MethodPost, path: wrongStackPath + "/events/batch", body: map[string]any{"events": []map[string]any{{"sequence": 2, "timestamp": 12346, "type": "resourcePreEvent"}}}},
+		{name: "get events", method: http.MethodGet, path: wrongStackPath + "/events"},
+		{name: "complete", method: http.MethodPost, path: wrongStackPath + "/complete", body: map[string]any{"status": "succeeded", "result": map[string]any{}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := api.do(tc.method, tc.path, tc.body)
+			assert.Equal(t, http.StatusNotFound, rec.Code)
+			assert.Contains(t, rec.Body.String(), "update not found")
+		})
+	}
+
+	rec := api.do(http.MethodGet, api.updatePath("dev", setup.updateID), nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var statusResp struct {
+		Status string `json:"status"`
+	}
+	api.jsonBody(rec, &statusResp)
+	assert.Equal(t, "in-progress", statusResp.Status)
 }
 
 func TestUpdateHandlers_StartNonExistentStackFails(t *testing.T) {
