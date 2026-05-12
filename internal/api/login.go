@@ -152,10 +152,28 @@ func (s *Server) handleLoginCallbackHuma(hCtx huma.Context, goCtx context.Contex
 		return
 	}
 
-	// Clear the state and nonce cookies.
-	clearStateCookie := &http.Cookie{Name: "oauth_state", Value: "", Path: "/", MaxAge: -1}
+	// Clear the state and nonce cookies. Mirror attributes used when setting
+	// them so the browser matches and reliably expires the cookie.
+	secure := isHTTPS(hCtx, s.publicURL)
+	clearStateCookie := &http.Cookie{ //nolint:gosec // Secure set conditionally based on TLS detection
+		Name:     "oauth_state",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+	}
 	hCtx.AppendHeader("Set-Cookie", clearStateCookie.String())
-	clearNonceCookie := &http.Cookie{Name: "oidc_nonce", Value: "", Path: "/", MaxAge: -1}
+	clearNonceCookie := &http.Cookie{ //nolint:gosec // Secure set conditionally based on TLS detection
+		Name:     "oidc_nonce",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   secure,
+	}
 	hCtx.AppendHeader("Set-Cookie", clearNonceCookie.String())
 
 	if input.Code == "" {
@@ -260,7 +278,7 @@ func generateCSRFToken() string {
 // setOAuthStateCookieHuma sets the OAuth state and OIDC nonce cookies.
 func (s *Server) setOAuthStateCookieHuma(ctx huma.Context, csrfToken, oidcNonce string) {
 	secure := isHTTPS(ctx, s.publicURL)
-	stateCookie := &http.Cookie{
+	stateCookie := &http.Cookie{ //nolint:gosec // Secure set conditionally based on TLS detection
 		Name:     "oauth_state",
 		Value:    csrfToken,
 		Path:     "/",
@@ -270,7 +288,7 @@ func (s *Server) setOAuthStateCookieHuma(ctx huma.Context, csrfToken, oidcNonce 
 		Secure:   secure,
 	}
 	ctx.AppendHeader("Set-Cookie", stateCookie.String())
-	nonceCookie := &http.Cookie{
+	nonceCookie := &http.Cookie{ //nolint:gosec // Secure set conditionally based on TLS detection
 		Name:     "oidc_nonce",
 		Value:    oidcNonce,
 		Path:     "/",
