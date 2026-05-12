@@ -100,6 +100,10 @@ func TestAuthMiddlewareAcceptsValidUpdateTokenOnUpdateRoute(t *testing.T) {
 	srv, store := newTestServer(t)
 	store.On("GetUpdate", mock.Anything, "up-1").Return(&storage.Update{
 		ID:             "up-1",
+		OrgName:        "org",
+		ProjectName:    "proj",
+		StackName:      "stack",
+		Kind:           "update",
 		Token:          "valid-token",
 		TokenExpiresAt: time.Now().Add(time.Minute),
 	}, nil)

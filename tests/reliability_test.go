@@ -925,7 +925,7 @@ func TestReliability_ErrorResponseFormat(t *testing.T) {
 			method:     "POST",
 			path:       fmt.Sprintf("/api/stacks/%s/rel-errfmt/dev/update/00000000-0000-0000-0000-000000000000/complete", rOrg),
 			body:       map[string]any{"status": "succeeded", "result": json.RawMessage(`{}`)},
-			wantStatus: 500,
+			wantStatus: 404,
 		},
 	}
 
