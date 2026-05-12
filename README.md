@@ -31,33 +31,33 @@ pulumi-backend uses the Pulumi Cloud HTTP protocol instead of the DIY blob proto
 ### `pulumi up` — 200 resources (create from scratch)
 
 ```
-pulumi-backend   ▓░ 4.2s
-GCS              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 317s (75x slower)
-CloudSQL PG 17   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 449s (107x slower)
+pulumi-backend   ░ 4.2s
+GCS              ▓▓▓▓▓ 317s (75x slower)
+CloudSQL PG 17   ▓▓▓▓▓▓▓ 449s (107x slower)
 ```
 
 ### `pulumi destroy` — 200 resources
 
 ```
-pulumi-backend   ▓░ 3.8s
-GCS              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 326s (86x slower)
-CloudSQL PG 17   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 551s (145x slower)
+pulumi-backend   ░ 3.8s
+GCS              ▓▓▓▓▓ 326s (86x slower)
+CloudSQL PG 17   ▓▓▓▓▓▓▓▓ 551s (145x slower)
 ```
 
 ### `pulumi up` — 600 resources (create from scratch)
 
 ```
-pulumi-backend   ▓░ 8.3s
-GCS              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 1274s (153x slower)
-CloudSQL PG 17   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 2614s (315x slower)
+pulumi-backend   ░ 8.3s
+GCS              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 1274s (153x slower)
+CloudSQL PG 17   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 2614s (315x slower)
 ```
 
 ### `pulumi destroy` — 600 resources
 
 ```
-pulumi-backend   ▓░ 7.2s
-GCS              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 1370s (190x slower)
-CloudSQL PG 17   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 2444s (340x slower)
+pulumi-backend   ░ 7.2s
+GCS              ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 1370s (190x slower)
+CloudSQL PG 17   ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ 2444s (340x slower)
 ```
 
 > All benchmarks: pulumi-backend on Cloud Run (4 vCPU, 8 GB), CloudSQL PostgreSQL 17 (4 vCPU, 8 GB), GCS bucket — same GCP region (europe-west4), client over internet. Averaged over 3 runs. Full results in [docs/benchmark-results.md](docs/benchmark-results.md).
