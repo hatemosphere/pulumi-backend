@@ -679,6 +679,7 @@ func pruneVersions(ctx context.Context, tx *sql.Tx, table, org, project, stack s
 	if keep <= 0 {
 		return nil
 	}
+	//nolint:gosec // G202: table is a trusted package-internal constant, never user input
 	_, err := tx.ExecContext(ctx,
 		`DELETE FROM `+table+` WHERE org_name=? AND project_name=? AND stack_name=? AND version NOT IN (
 			SELECT version FROM `+table+` WHERE org_name=? AND project_name=? AND stack_name=?
