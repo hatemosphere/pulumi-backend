@@ -353,6 +353,24 @@ func TestReliability_PrunedVersionReturns404(t *testing.T) {
 	if !strings.Contains(string(data), "v5") {
 		t.Fatal("expected 'v5' in version 5 export")
 	}
+
+	// History must be pruned in lockstep: it should never list a version whose
+	// state has already been pruned (otherwise `pulumi stack history` lies).
+	resp := tb.httpDo(t, "GET", fmt.Sprintf("/api/stacks/%s/rel-prune/dev/updates", rOrg), nil)
+	var historyResp struct {
+		Updates []struct {
+			Version int `json:"version"`
+		} `json:"updates"`
+	}
+	httpJSON(t, resp, &historyResp)
+	if len(historyResp.Updates) != 3 {
+		t.Fatalf("expected 3 history entries (matching MaxStateVersions), got %d", len(historyResp.Updates))
+	}
+	for _, u := range historyResp.Updates {
+		if u.Version < 3 {
+			t.Fatalf("history lists pruned version %d", u.Version)
+		}
+	}
 }
 
 // --- Category 3: Delta Checkpoint Correctness ---

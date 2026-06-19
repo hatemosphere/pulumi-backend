@@ -46,15 +46,13 @@ func nullUnixToTimePtr(v sql.NullInt64) *time.Time {
 	return &t
 }
 
-const defaultMaxStateVersions = 50
-
 func isUniqueConstraintError(err error) bool {
 	return errors.Is(err, sqlite3.CONSTRAINT_UNIQUE) || errors.Is(err, sqlite3.CONSTRAINT_PRIMARYKEY)
 }
 
 // SQLiteStoreConfig holds tuning parameters for SQLiteStore.
 type SQLiteStoreConfig struct {
-	MaxStateVersions  int // 0 = default (50), -1 = unlimited
+	MaxStateVersions  int // <= 0 = unlimited; positive = keep N most recent versions per stack
 	StackListPageSize int // 0 = default (100)
 }
 
@@ -93,14 +91,12 @@ func NewSQLiteStore(path string, cfgs ...SQLiteStoreConfig) (*SQLiteStore, error
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	maxVer := defaultMaxStateVersions
+	maxVer := 0 // unlimited unless a positive limit is configured
 	pageSize := 100
 	if len(cfgs) > 0 {
 		cfg := cfgs[0]
 		if cfg.MaxStateVersions > 0 {
 			maxVer = cfg.MaxStateVersions
-		} else if cfg.MaxStateVersions < 0 {
-			maxVer = 0 // unlimited
 		}
 		if cfg.StackListPageSize > 0 {
 			pageSize = cfg.StackListPageSize
@@ -676,6 +672,22 @@ func (s *SQLiteStore) GetCurrentStateRaw(ctx context.Context, org, project, stac
 	return data, version, isCompressed, err
 }
 
+// pruneVersions deletes all but the `keep` most recent versions of a stack from
+// the given table (stack_state or update_history). keep <= 0 means unlimited (no-op).
+// table must be a trusted constant, never user input.
+func pruneVersions(ctx context.Context, tx *sql.Tx, table, org, project, stack string, keep int) error {
+	if keep <= 0 {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx,
+		`DELETE FROM `+table+` WHERE org_name=? AND project_name=? AND stack_name=? AND version NOT IN (
+			SELECT version FROM `+table+` WHERE org_name=? AND project_name=? AND stack_name=?
+			ORDER BY version DESC LIMIT ?
+		)`,
+		org, project, stack, org, project, stack, keep)
+	return err
+}
+
 // SaveState persists a deployment state version and updates the stack's current version.
 func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 	now := time.Now().Unix()
@@ -717,18 +729,8 @@ func (s *SQLiteStore) SaveState(ctx context.Context, state *StackState) error {
 	}
 
 	// Prune old state versions, keeping only the most recent N.
-	if s.maxStateVersions > 0 {
-		_, err = tx.ExecContext(ctx,
-			`DELETE FROM stack_state WHERE org_name=? AND project_name=? AND stack_name=? AND version NOT IN (
-				SELECT version FROM stack_state WHERE org_name=? AND project_name=? AND stack_name=?
-				ORDER BY version DESC LIMIT ?
-			)`,
-			state.OrgName, state.ProjectName, state.StackName,
-			state.OrgName, state.ProjectName, state.StackName,
-			s.maxStateVersions)
-		if err != nil {
-			return err
-		}
+	if err := pruneVersions(ctx, tx, "stack_state", state.OrgName, state.ProjectName, state.StackName, s.maxStateVersions); err != nil {
+		return err
 	}
 
 	return tx.Commit()
@@ -1080,12 +1082,29 @@ func (s *SQLiteStore) SaveUpdateHistory(ctx context.Context, h *UpdateHistory) e
 		t := h.EndTime.Unix()
 		endTime = &t
 	}
-	_, err := s.db.ExecContext(ctx,
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+
+	_, err = tx.ExecContext(ctx,
 		`INSERT OR REPLACE INTO update_history (org_name, project_name, stack_name, version, update_id, kind, status, message, environment, config, start_time, end_time, resource_changes)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		h.OrgName, h.ProjectName, h.StackName, h.Version, h.UpdateID, h.Kind, h.Status,
 		h.Message, h.Environment, h.Config, h.StartTime.Unix(), endTime, h.ResourceChanges)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Prune old history in lockstep with state retention, so `pulumi stack
+	// history` never lists a version whose state blob has already been pruned.
+	if err := pruneVersions(ctx, tx, "update_history", h.OrgName, h.ProjectName, h.StackName, s.maxStateVersions); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // GetUpdateHistory returns paginated update history for a stack.
