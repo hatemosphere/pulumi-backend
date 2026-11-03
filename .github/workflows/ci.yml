@@ -133,7 +133,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: pulumi/actions@8582a9e8cc630786854029b4e09281acd6794b58 # v6.6.1
+      - uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
         with:
           pulumi-version: 3.228.0
 
@@ -176,7 +176,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: pulumi/actions@8582a9e8cc630786854029b4e09281acd6794b58 # v6.6.1
+      - uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
         with:
           pulumi-version: ${{ matrix.pulumi-version }}
 
